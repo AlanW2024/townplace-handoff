@@ -12,6 +12,60 @@
 本系統作為現有 WhatsApp 群組與物業管理系統之間的「橋樑 (Bridge)」。
 核心特色：**工作流程零改變**。前線員工依然在熟悉的 WhatsApp 中溝通，而本系統會自動即時解析這些對話，提取出結構化的房號、動作與交接信號，並統一呈現在一個清晰的即時儀表板上。
 
+## 系統工作流程 (System Workflow)
+
+```mermaid
+flowchart TD
+    WA["📱 WhatsApp 群組訊息"] -->|匯出 .txt 或手動輸入| UPLOAD["上傳 / 輸入訊息"]
+    UPLOAD --> PARSER["🔍 Parser 解析引擎<br/>房號 · 動作 · 部門 · 信心度"]
+
+    PARSER --> CHECK{信心度 ≥ 75%<br/>且非 Summary？}
+
+    CHECK -->|✅ 高信心度| AUTO["⚡ 自動套用"]
+    AUTO --> ROOM["🏠 房間狀態更新"]
+    AUTO --> HANDOFF["🔄 交接信號建立"]
+
+    CHECK -->|❌ 低信心度 / Summary| REVIEW["👁️ 人工覆核 Queue"]
+    REVIEW -->|批准 / 修正| AUTO
+    REVIEW -->|略過| SKIP["不套用"]
+
+    ROOM --> STORE[("📦 資料庫<br/>.demo-store.json")]
+    HANDOFF --> STORE
+
+    STORE --> AI["🤖 AI 建議引擎<br/>8 條分析規則"]
+    STORE --> NOTIF["🔔 通知中心<br/>7+ 條即時規則"]
+
+    AI --> SUGGEST["💡 AI 管理建議"]
+    SUGGEST -->|一鍵建立| FOLLOWUP["📋 跟進事項"]
+
+    NOTIF --> ALERT["⚠️ 即時營運提醒<br/>超時 · 超期 · 衝突 · 到期"]
+
+    STORE --> DASH["📊 儀表板"]
+    DASH --> D1["訊息中心"]
+    DASH --> D2["房間看板"]
+    DASH --> D3["文件追蹤"]
+    DASH --> D4["預約日曆"]
+    DASH --> D5["每日報告"]
+
+    style CHECK fill:#FEF3C7,stroke:#F59E0B
+    style AUTO fill:#D1FAE5,stroke:#10B981
+    style REVIEW fill:#FEE2E2,stroke:#EF4444
+    style AI fill:#EDE9FE,stroke:#8B5CF6
+    style NOTIF fill:#DBEAFE,stroke:#3B82F6
+    style STORE fill:#F3F4F6,stroke:#6B7280
+```
+
+### 核心流程說明
+
+| 階段 | 說明 |
+|------|------|
+| **訊息輸入** | 前線員工照常在 WhatsApp 溝通，匯出 `.txt` 或透過系統輸入 |
+| **解析與分流** | Parser 自動提取房號、動作、部門。高信心度直接生效；低信心度或 summary 訊息進人工覆核 |
+| **人工覆核** | 管理員檢查解析結果，可批准、修正或略過，修正後才套用房間狀態 |
+| **AI 分析** | 規則引擎持續掃描全部數據，產出分優先級的管理建議 |
+| **一鍵跟進** | 從 AI 建議直接建立跟進任務，分配部門與追蹤狀態 |
+| **即時通知** | 系統自動偵測交接超時、文件超期、預約衝突、任務到期等異常 |
+
 ## 主要功能模組
 
 1. **訊息中心即時動態 (Message Feed)**：自動分類顯示原始 WhatsApp 訊息，並展示 AI 標籤化的解析結果（房號、置信度、發出對象）。
@@ -21,6 +75,10 @@
 5. **預約日曆 (Bookings)**：整合睇樓、拍攝及住客活動的排期時間表。
 6. **WhatsApp 匯出檔解析器 (Upload Demo Parser)**：支援手動上傳由 WhatsApp 手機端匯出的 `.txt` 紀錄檔，系統會精準合併多段訊息並批次解析為交接任務。（目前為取代 Twilio API 的 Demo 備案）
 7. **每日報告自動產生 (Auto Daily Report)**：系統能依據當日的溝通紀錄，一鍵生成原本需人工整理的「是日跟進」文字報告，方便直接貼回 WhatsApp。
+8. **AI 管理建議 (AI Suggestions)**：規則引擎分析房間、交接、文件、預約數據，產出分優先級的管理建議（清潔積壓、工程瓶頸、文件超期等）。
+9. **跟進事項 (Follow-ups)**：從 AI 建議一鍵建立跟進任務，支援狀態流轉（待處理 → 進行中 → 完成 / 略過）與部門指派。
+10. **人工覆核 (Review Queue)**：低信心度或 summary 類型訊息自動排入覆核佇列，管理員可批准、修正或略過，確保房間狀態不被錯誤更新。
+11. **通知中心 (Notifications)**：即時計算營運異常提醒，包括交接超時、文件超期、預約衝突、待覆核、緊急跟進、任務到期等。
 
 ## 技術架構 (Technology Stack)
 
@@ -29,7 +87,7 @@
 - **框架：** Next.js 14+ (App Router), React 18, TypeScript
 - **樣式：** Tailwind CSS, 玻璃擬物化設計 (Glassmorphism)
 - **圖示庫：** Lucide React
-- **資料儲存：** In-Memory Store (`src/lib/store.ts`) — *註：後續可無縫銜接 Supabase (PostgreSQL)*
+- **資料儲存：** 檔案式 JSON Store (`.demo-store.json`) — *註：後續可無縫銜接 Supabase (PostgreSQL)*
 - **AI 解析：** 目前採用進階的 Regex 與關鍵字圖譜結合的方式模擬大語言模型的提取效果 (`src/lib/parser.ts`)，以達成極低的延遲及無須 API Token 的離線展示能力。
 
 ## 如何在本地端運行 (How to Run Locally)
@@ -63,8 +121,10 @@
 - `/src/app/api/`：模擬後端資料庫讀寫的 API 路由。
 - `/src/components/`：跨頁面使用的獨立 UI 元件（如側邊導覽列 `Sidebar.tsx`）。
 - `/src/lib/`：核心業務邏輯。
-  - `store.ts`：記憶體資料庫實作與初始假資料固定種子 (Deterministic Seeds)。
+  - `store.ts`：檔案式 JSON 資料庫實作與初始種子資料生成。
   - `parser.ts`：WhatsApp 訊息的意圖辨識與實體擷取引擎。
-  - `ingest.ts`：統一的資料寫入中樞，處理從接收訊息到觸發狀態變更的完整生命週期。
+  - `ingest.ts`：統一的資料寫入中樞，處理從接收訊息到觸發狀態變更的完整生命週期，含 summary 訊息偵測與覆核分流。
+  - `suggestions.ts`：AI 建議規則引擎（8 條分析規則）。
+  - `notifications.ts`：即時通知生成引擎（7+ 條規則）。
   - `types.ts`：全域 TypeScript 型別定義。
   - `utils.ts`：共用的幫助函式（如時間格式化、Tailwind CSS class 合併）。
