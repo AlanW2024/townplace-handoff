@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getStore, saveStore } from '@/lib/store';
 import { roomNeedsAttention } from '@/lib/utils';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
     const store = getStore();
     const { searchParams } = new URL(request.url);

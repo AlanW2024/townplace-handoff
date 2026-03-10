@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { FileText, Clock, AlertTriangle, ChevronRight, User } from 'lucide-react';
 import { Document, STATUS_LABELS } from '@/lib/types';
 import { cn, formatDateTime } from '@/lib/utils';
+import { useToast } from '@/components/Toast';
 
 const DOC_PIPELINE = ['not_started', 'preparing', 'pending_sign', 'with_tenant', 'with_company', 'completed'];
 const DOC_PIPELINE_LABELS = ['未開始', '準備中', '待簽署', '租客持有', '公司持有', '已完成'];
@@ -47,26 +48,35 @@ function DocStatusPipeline({ currentStatus }: { currentStatus: string }) {
 export default function DocumentsPage() {
     const [documents, setDocuments] = useState<Document[]>([]);
     const [loading, setLoading] = useState(true);
+    const { showToast } = useToast();
 
     const fetchDocs = useCallback(async () => {
         try {
             const res = await fetch('/api/documents');
+            if (!res.ok) throw new Error('載入失敗');
             setDocuments(await res.json());
-        } catch (e) { console.error(e); }
+        } catch (e: any) { showToast(e.message || '載入文件失敗', 'error'); }
         finally { setLoading(false); }
-    }, []);
+    }, [showToast]);
 
     useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
+    useEffect(() => {
+        const interval = setInterval(fetchDocs, 5000);
+        return () => clearInterval(interval);
+    }, [fetchDocs]);
+
     const updateDocStatus = async (id: string, newStatus: string) => {
         try {
-            await fetch('/api/documents', {
+            const res = await fetch('/api/documents', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id, status: newStatus }),
             });
+            if (!res.ok) throw new Error('更新失敗');
+            showToast('文件狀態已更新', 'success');
             fetchDocs();
-        } catch (e) { console.error(e); }
+        } catch (e: any) { showToast(e.message || '更新文件失敗', 'error'); }
     };
 
     const outstanding = documents.filter(d => d.status !== 'completed');

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Calendar, MapPin, Clock, AlertTriangle } from 'lucide-react';
 import { Booking, DEPT_INFO } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { useToast } from '@/components/Toast';
 
 const TYPE_LABELS: Record<string, string> = {
     viewing: '🏠 睇樓', shooting: '📷 拍攝',
@@ -19,13 +20,23 @@ function fmtTime(d: string) { return new Date(d).toLocaleTimeString('zh-HK', { h
 export default function BookingsPage() {
     const [bookings, setBookings] = useState<Booking[]>([]);
     const [loading, setLoading] = useState(true);
+    const { showToast } = useToast();
 
     const fetch_ = useCallback(async () => {
-        try { setBookings(await (await fetch('/api/bookings')).json()); }
-        catch (e) { console.error(e); }
+        try {
+            const res = await fetch('/api/bookings');
+            if (!res.ok) throw new Error('載入失敗');
+            setBookings(await res.json());
+        }
+        catch (e: any) { showToast(e.message || '載入預約失敗', 'error'); }
         finally { setLoading(false); }
-    }, []);
+    }, [showToast]);
     useEffect(() => { fetch_(); }, [fetch_]);
+
+    useEffect(() => {
+        const interval = setInterval(fetch_, 5000);
+        return () => clearInterval(interval);
+    }, [fetch_]);
 
     const grouped = bookings.reduce<Record<string, Booking[]>>((a, b) => {
         const k = new Date(b.scheduled_at).toLocaleDateString('zh-HK', { year: 'numeric', month: 'long', day: 'numeric' });

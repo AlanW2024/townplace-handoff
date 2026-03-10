@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { MessageSquare, ArrowRightLeft, Send, AlertTriangle } from 'lucide-react';
 import { Message, Handoff, DEPT_INFO, DeptCode } from '@/lib/types';
 import { cn, formatTime, timeAgo } from '@/lib/utils';
+import { useToast } from '@/components/Toast';
 
 // ===========================
 // Department Badge Component
@@ -155,6 +156,7 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(true);
     const [newMessage, setNewMessage] = useState('');
     const [senderName, setSenderName] = useState('');
+    const { showToast } = useToast();
 
     const fetchData = useCallback(async () => {
         try {
@@ -162,22 +164,29 @@ export default function DashboardPage() {
                 fetch('/api/messages'),
                 fetch('/api/handoffs'),
             ]);
+            if (!msgRes.ok || !hoRes.ok) throw new Error('載入失敗');
             const [msgs, hos] = await Promise.all([msgRes.json(), hoRes.json()]);
             setMessages(msgs);
             setHandoffs(hos);
-        } catch (e) {
-            console.error('Failed to fetch:', e);
+        } catch (e: any) {
+            showToast(e.message || '載入資料失敗', 'error');
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [showToast]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
+
+    // Auto refresh every 5 seconds
+    useEffect(() => {
+        const interval = setInterval(fetchData, 5000);
+        return () => clearInterval(interval);
+    }, [fetchData]);
 
     const handleSendMessage = async () => {
         if (!newMessage.trim()) return;
         try {
-            await fetch('/api/messages', {
+            const res = await fetch('/api/messages', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -185,23 +194,27 @@ export default function DashboardPage() {
                     sender_name: senderName || 'Test User',
                 }),
             });
+            if (!res.ok) throw new Error('發送失敗');
             setNewMessage('');
+            showToast('訊息已發送', 'success');
             fetchData();
-        } catch (e) {
-            console.error('Failed to send:', e);
+        } catch (e: any) {
+            showToast(e.message || '發送訊息失敗', 'error');
         }
     };
 
     const handleAcknowledge = async (id: string) => {
         try {
-            await fetch('/api/handoffs', {
+            const res = await fetch('/api/handoffs', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id, status: 'acknowledged' }),
             });
+            if (!res.ok) throw new Error('確認失敗');
+            showToast('交接已確認', 'success');
             fetchData();
-        } catch (e) {
-            console.error('Failed to acknowledge:', e);
+        } catch (e: any) {
+            showToast(e.message || '確認失敗', 'error');
         }
     };
 

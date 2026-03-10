@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { ingestMessage } from '@/lib/ingest';
 import { Message } from '@/lib/types';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: Request) {
     const formData = await request.formData();
     const file = formData.get('file') as File;

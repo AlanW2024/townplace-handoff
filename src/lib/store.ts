@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Room, Message, Handoff, Document, Booking, DeptCode } from './types';
+import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, DeptCode } from './types';
 import { parseWhatsAppMessage } from './parser';
 
 export interface StoreData {
@@ -9,6 +9,8 @@ export interface StoreData {
     handoffs: Handoff[];
     documents: Document[];
     bookings: Booking[];
+    followups: Followup[];
+    parse_reviews: ParseReview[];
 }
 
 const STORE_PATH = path.join(process.cwd(), '.demo-store.json');
@@ -192,6 +194,8 @@ function buildSeedStore(): StoreData {
         handoffs,
         documents: generateSeedDocuments(),
         bookings: generateSeedBookings(),
+        followups: [],
+        parse_reviews: [],
     };
 }
 
@@ -209,6 +213,8 @@ function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
         handoffs: store.handoffs ?? seedStore.handoffs,
         documents: store.documents ?? seedStore.documents,
         bookings: store.bookings ?? seedStore.bookings,
+        followups: store.followups ?? seedStore.followups,
+        parse_reviews: store.parse_reviews ?? seedStore.parse_reviews,
     };
 }
 

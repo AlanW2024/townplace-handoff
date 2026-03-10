@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import Sidebar from '@/components/Sidebar';
+import { LayoutShell } from '@/components/LayoutShell';
 
 export const metadata: Metadata = {
     title: 'TOWNPLACE SOHO — Handoff Bridge',
@@ -15,14 +15,7 @@ export default function RootLayout({
     return (
         <html lang="zh-Hant">
             <body>
-                <div className="min-h-screen flex">
-                    <Sidebar />
-                    <main className="flex-1 lg:ml-64 min-h-screen">
-                        <div className="p-4 lg:p-8 max-w-[1600px] mx-auto">
-                            {children}
-                        </div>
-                    </main>
-                </div>
+                <LayoutShell>{children}</LayoutShell>
             </body>
         </html>
     );

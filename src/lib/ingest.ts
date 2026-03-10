@@ -1,4 +1,4 @@
-import { Message, Handoff, DeptCode } from './types';
+import { Message, Handoff, ParseReview, DeptCode } from './types';
 import { parseWhatsAppMessage, getDeptFromSender } from './parser';
 import { getStore, saveStore } from './store';
 
@@ -19,9 +19,38 @@ interface IngestInput {
 interface IngestResult {
     message: Message;
     handoffs: Handoff[];
+    review: ParseReview | null;
 }
 
 let ingestCounter = 0;
+
+/**
+ * Detect summary / aggregate messages that should go to review queue
+ * instead of being auto-applied with a single action across all rooms.
+ */
+function isSummaryMessage(rawText: string, parsed: { rooms: string[]; action: string | null }): boolean {
+    const text = rawText.trim();
+
+    // Starts with "是日跟進" or similar daily summary headers
+    if (/^是日跟進|^今日跟進|^daily\s*follow/i.test(text)) return true;
+
+    // Multi-line bullet list (2+ lines starting with - or •)
+    const bulletLines = text.split('\n').filter(l => /^\s*[-•·]\s/.test(l));
+    if (bulletLines.length >= 2) return true;
+
+    // Multiple rooms + multiple distinct action keywords in one message
+    if (parsed.rooms.length >= 2) {
+        const actionKeywords = [
+            /[Cc]heck\s*out|退房/, /[Cc]heck\s*in|入住/, /[Ff]inal/,
+            /完成.*可清|可清潔|可清$/, /執修|維修/, /清潔完成|[Dd]eep\s*clean/,
+            /脫落|壞|漏水/, /吱膠|打膠/, /[Ll]ogged/,
+        ];
+        const matchedCount = actionKeywords.filter(kw => kw.test(text)).length;
+        if (matchedCount >= 2) return true;
+    }
+
+    return false;
+}
 
 export function ingestMessage(input: IngestInput): IngestResult {
     const store = getStore();
@@ -60,42 +89,77 @@ export function ingestMessage(input: IngestInput): IngestResult {
     // 4. Add message to store
     store.messages.push(msg);
 
-    // 5. Apply side effects — handoffs + room status updates
-    const handoffs: Handoff[] = [];
+    // 5. Check if review is needed
+    const isSummary = isSummaryMessage(input.raw_text, parsed);
+    const needsReview = parsed.confidence < 0.75 || !parsed.action || isSummary;
+    let review: ParseReview | null = null;
 
-    const effectFromDept = parsed.from_dept || senderDept;
-    const effectToDept = parsed.to_dept;
-
-    // Create handoffs for handoff-type messages
-    if (parsed.type === 'handoff' && effectFromDept && effectToDept) {
-        for (const roomId of parsed.rooms) {
-            const ho: Handoff = {
-                id: `ho-${Date.now()}-${ingestCounter}-${roomId}`,
-                room_id: roomId,
-                from_dept: effectFromDept,
-                to_dept: effectToDept,
-                action: parsed.action || '',
-                status: 'pending',
-                triggered_by: msg.id,
-                created_at: sentAt,
-                acknowledged_at: null,
-            };
-            store.handoffs.push(ho);
-            handoffs.push(ho);
-        }
+    if (needsReview) {
+        // Create a review entry — defer side effects until approved
+        review = {
+            id: `rev-${Date.now()}-${ingestCounter}`,
+            message_id: msg.id,
+            raw_text: input.raw_text,
+            sender_name: input.sender_name,
+            sender_dept: senderDept || 'conc',
+            confidence: parsed.confidence,
+            suggested_rooms: parsed.rooms,
+            suggested_action: parsed.action,
+            suggested_type: parsed.type,
+            suggested_from_dept: parsed.from_dept,
+            suggested_to_dept: parsed.to_dept,
+            reviewed_rooms: parsed.rooms,
+            reviewed_action: parsed.action,
+            reviewed_type: parsed.type,
+            reviewed_from_dept: parsed.from_dept,
+            reviewed_to_dept: parsed.to_dept,
+            review_status: 'pending',
+            reviewed_by: null,
+            reviewed_at: null,
+            created_at: now,
+            updated_at: now,
+        };
+        store.parse_reviews.push(review);
     }
 
-    // 6. Update room statuses based on parsed action
-    for (const roomId of parsed.rooms) {
-        const room = store.rooms.find(r => r.id === roomId);
-        if (!room) continue;
+    // 6. Apply side effects — only if confidence is high enough
+    const handoffs: Handoff[] = [];
 
-        applyRoomStatusUpdate(room, parsed.action, effectFromDept || null, msg.sender_name);
+    if (!needsReview) {
+        const effectFromDept = parsed.from_dept || senderDept;
+        const effectToDept = parsed.to_dept;
+
+        // Create handoffs for handoff-type messages
+        if (parsed.type === 'handoff' && effectFromDept && effectToDept) {
+            for (const roomId of parsed.rooms) {
+                const ho: Handoff = {
+                    id: `ho-${Date.now()}-${ingestCounter}-${roomId}`,
+                    room_id: roomId,
+                    from_dept: effectFromDept,
+                    to_dept: effectToDept,
+                    action: parsed.action || '',
+                    status: 'pending',
+                    triggered_by: msg.id,
+                    created_at: sentAt,
+                    acknowledged_at: null,
+                };
+                store.handoffs.push(ho);
+                handoffs.push(ho);
+            }
+        }
+
+        // Update room statuses based on parsed action
+        for (const roomId of parsed.rooms) {
+            const room = store.rooms.find(r => r.id === roomId);
+            if (!room) continue;
+
+            applyRoomStatusUpdate(room, parsed.action, effectFromDept || null, msg.sender_name);
+        }
     }
 
     saveStore(store);
 
-    return { message: msg, handoffs };
+    return { message: msg, handoffs, review };
 }
 
 /**

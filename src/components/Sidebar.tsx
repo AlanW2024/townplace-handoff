@@ -3,9 +3,11 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import {
     MessageSquare, LayoutGrid, ArrowRightLeft, FileText,
-    ClipboardList, Calendar, Upload, Building2, Menu, X
+    ClipboardList, Calendar, Upload, Building2, Menu, X, LogOut,
+    Lightbulb, ListChecks, SearchCheck, Bell
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -14,13 +16,23 @@ const NAV_ITEMS = [
     { href: '/rooms', icon: LayoutGrid, label: '房間看板', labelEn: 'Rooms' },
     { href: '/documents', icon: FileText, label: '文件追蹤', labelEn: 'Documents' },
     { href: '/report', icon: ClipboardList, label: '每日報告', labelEn: 'Report' },
+    { href: '/ai', icon: Lightbulb, label: 'AI 建議', labelEn: 'AI Suggestions' },
+    { href: '/followups', icon: ListChecks, label: '跟進事項', labelEn: 'Follow-ups' },
+    { href: '/reviews', icon: SearchCheck, label: '人工覆核', labelEn: 'Reviews' },
+    { href: '/notifications', icon: Bell, label: '通知中心', labelEn: 'Notifications' },
     { href: '/bookings', icon: Calendar, label: '預約日曆', labelEn: 'Bookings' },
     { href: '/upload', icon: Upload, label: '上傳訊息', labelEn: 'Upload' },
 ];
 
 export default function Sidebar() {
     const pathname = usePathname();
+    const router = useRouter();
     const [mobileOpen, setMobileOpen] = useState(false);
+
+    const handleLogout = async () => {
+        await fetch('/api/auth', { method: 'DELETE' });
+        router.push('/login');
+    };
 
     return (
         <>
@@ -84,11 +96,18 @@ export default function Sidebar() {
                 </nav>
 
                 {/* Footer */}
-                <div className="px-6 py-4 border-t border-slate-200/60">
+                <div className="px-6 py-4 border-t border-slate-200/60 space-y-3">
                     <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse-gentle" />
                         <span className="text-xs text-slate-400">系統運行中</span>
                     </div>
+                    <button
+                        onClick={handleLogout}
+                        className="flex items-center gap-2 text-xs text-slate-400 hover:text-red-500 transition-colors w-full"
+                    >
+                        <LogOut size={14} />
+                        <span>登出</span>
+                    </button>
                 </div>
             </aside>
         </>

@@ -1,101 +1,132 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { LayoutGrid, Search, Filter, AlertTriangle, ChevronDown, X, Clock } from 'lucide-react';
-import { Room, Message, DEPT_INFO, STATUS_LABELS } from '@/lib/types';
-import { cn, formatTime, roomNeedsAttention } from '@/lib/utils';
+import { AlertTriangle, Wrench, Sparkles, Key, Filter } from 'lucide-react';
+import { Room, STATUS_LABELS } from '@/lib/types';
+import { cn } from '@/lib/utils';
 
-function StatusBadge({ status, type }: { status: string; type: 'eng' | 'clean' | 'lease' }) {
-    const label = STATUS_LABELS[status] || status;
-    const colorMap: Record<string, string> = {
-        completed: 'bg-status-done-light text-emerald-700',
-        in_progress: 'bg-status-progress-light text-amber-700',
-        pending: 'bg-status-pending-light text-purple-700',
-        n_a: 'bg-slate-100 text-slate-400',
-        occupied: 'bg-blue-50 text-blue-700',
-        vacant: 'bg-slate-100 text-slate-500',
-        newlet: 'bg-pink-50 text-pink-700',
-        checkout: 'bg-red-50 text-red-700',
-    };
+const FLOORS = Array.from({ length: 30 }, (_, i) => 32 - i);
+const UNITS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M'];
 
-    return (
-        <span className={cn('status-badge text-[10px]', colorMap[status] || 'bg-slate-100 text-slate-500')}>
-            {type === 'eng' ? '🔧' : type === 'clean' ? '🧹' : '🏠'} {label}
-        </span>
-    );
+type FilterMode = 'all' | 'attention' | 'eng' | 'clean' | 'vacant';
+
+function getEngColor(status: string) {
+    switch (status) {
+        case 'completed': return 'bg-emerald-400';
+        case 'in_progress': return 'bg-amber-400';
+        case 'pending': return 'bg-red-400';
+        default: return 'bg-slate-200';
+    }
 }
 
-function RoomCard({ room, onClick, isSelected }: { room: Room; onClick: () => void; isSelected: boolean }) {
-    const needsAttention = roomNeedsAttention(room);
+function getCleanColor(status: string) {
+    switch (status) {
+        case 'completed': return 'bg-emerald-400';
+        case 'in_progress': return 'bg-amber-400';
+        case 'pending': return 'bg-purple-400';
+        default: return 'bg-slate-200';
+    }
+}
+
+function RoomCell({ room, onClick }: { room: Room | undefined; onClick: (r: Room) => void }) {
+    if (!room) return <div className="w-full aspect-square" />;
 
     return (
         <button
-            onClick={onClick}
+            onClick={() => onClick(room)}
             className={cn(
-                'glass-card-hover p-3 text-left w-full relative transition-all',
-                isSelected && 'ring-2 ring-blue-500 shadow-md',
-                needsAttention && 'border-l-4 border-l-amber-400'
+                'w-full aspect-square rounded-lg text-[10px] font-bold relative transition-all duration-200',
+                'flex flex-col items-center justify-center gap-0.5',
+                'hover:scale-110 hover:z-10 hover:shadow-lg',
+                room.needs_attention
+                    ? 'bg-amber-50 border-2 border-amber-300 text-amber-800'
+                    : room.lease_status === 'occupied'
+                        ? 'bg-blue-50 border border-blue-200 text-blue-700'
+                        : room.lease_status === 'vacant'
+                            ? 'bg-white border border-slate-200 text-slate-600'
+                            : room.lease_status === 'newlet'
+                                ? 'bg-pink-50 border border-pink-200 text-pink-700'
+                                : 'bg-red-50 border border-red-200 text-red-700'
             )}
         >
-            {needsAttention && (
-                <div className="absolute top-2 right-2">
-                    <AlertTriangle size={14} className="text-amber-500" />
-                </div>
-            )}
-            <div className="text-lg font-bold text-slate-800 mb-2">{room.id}</div>
-            <div className="space-y-1">
-                {room.eng_status !== 'n_a' && <StatusBadge status={room.eng_status} type="eng" />}
-                {room.clean_status !== 'n_a' && <StatusBadge status={room.clean_status} type="clean" />}
-                <StatusBadge status={room.lease_status} type="lease" />
+            <span className="font-bold text-xs">{room.id}</span>
+            <div className="flex gap-0.5">
+                {room.eng_status !== 'n_a' && <div className={cn('w-1.5 h-1.5 rounded-full', getEngColor(room.eng_status))} />}
+                {room.clean_status !== 'n_a' && <div className={cn('w-1.5 h-1.5 rounded-full', getCleanColor(room.clean_status))} />}
             </div>
-            <div className="mt-2 text-[10px] text-slate-400">{room.attention_reason || room.room_type}</div>
+            {room.needs_attention && (
+                <div className="absolute -top-1 -right-1 w-3 h-3 bg-amber-400 rounded-full animate-pulse-gentle" />
+            )}
         </button>
     );
 }
 
-function RoomTimeline({ roomId, onClose }: { roomId: string; onClose: () => void }) {
-    const [messages, setMessages] = useState<Message[]>([]);
-
-    useEffect(() => {
-        fetch('/api/messages')
-            .then(r => r.json())
-            .then((msgs: Message[]) => {
-                setMessages(msgs.filter(m => m.parsed_room.includes(roomId)));
-            });
-    }, [roomId]);
-
+function RoomDetail({ room, onClose }: { room: Room; onClose: () => void }) {
     return (
-        <div className="glass-card p-5 animate-slide-in">
-            <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                    <Clock size={16} className="text-blue-500" />
-                    <h3 className="font-semibold text-slate-800">房間 {roomId} 時間線</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
+            <div className="glass-card p-6 max-w-sm w-full relative z-10 animate-fade-in" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-xl font-bold text-slate-800">{room.id}</h3>
+                    <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-lg">&times;</button>
                 </div>
-                <button onClick={onClose} className="btn-ghost p-1">
-                    <X size={16} />
-                </button>
-            </div>
-            {messages.length === 0 ? (
-                <p className="text-sm text-slate-400 text-center py-6">暫無相關訊息</p>
-            ) : (
+
                 <div className="space-y-3">
-                    {messages.map(msg => (
-                        <div key={msg.id} className="flex gap-3 text-sm">
-                            <div className="w-1.5 rounded-full shrink-0" style={{ backgroundColor: DEPT_INFO[msg.sender_dept]?.color || '#94A3B8' }} />
-                            <div>
-                                <div className="flex items-center gap-2 mb-0.5">
-                                    <span className="font-medium text-slate-700">{msg.sender_name}</span>
-                                    <span className="text-xs text-slate-400">{formatTime(msg.sent_at)}</span>
-                                </div>
-                                <p className="text-slate-600 text-xs">{msg.raw_text}</p>
-                                {msg.parsed_action && (
-                                    <p className="text-xs text-blue-600 mt-0.5">→ {msg.parsed_action}</p>
-                                )}
-                            </div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div className="p-2.5 rounded-lg bg-slate-50">
+                            <p className="text-[10px] text-slate-400 uppercase">房型</p>
+                            <p className="font-semibold text-slate-700">{room.room_type}</p>
                         </div>
-                    ))}
+                        <div className="p-2.5 rounded-lg bg-slate-50">
+                            <p className="text-[10px] text-slate-400 uppercase">樓層</p>
+                            <p className="font-semibold text-slate-700">{room.floor}F</p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50">
+                            <span className="text-xs text-slate-500 flex items-center gap-1.5"><Wrench size={12} /> 工程</span>
+                            <span className={cn('status-badge text-[10px]',
+                                room.eng_status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                                    room.eng_status === 'in_progress' ? 'bg-amber-100 text-amber-700' :
+                                        room.eng_status === 'pending' ? 'bg-red-100 text-red-700' :
+                                            'bg-slate-100 text-slate-500'
+                            )}>{STATUS_LABELS[room.eng_status]}</span>
+                        </div>
+                        <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50">
+                            <span className="text-xs text-slate-500 flex items-center gap-1.5"><Sparkles size={12} /> 清潔</span>
+                            <span className={cn('status-badge text-[10px]',
+                                room.clean_status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                                    room.clean_status === 'in_progress' ? 'bg-amber-100 text-amber-700' :
+                                        room.clean_status === 'pending' ? 'bg-purple-100 text-purple-700' :
+                                            'bg-slate-100 text-slate-500'
+                            )}>{STATUS_LABELS[room.clean_status]}</span>
+                        </div>
+                        <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50">
+                            <span className="text-xs text-slate-500 flex items-center gap-1.5"><Key size={12} /> 租務</span>
+                            <span className={cn('status-badge text-[10px]',
+                                room.lease_status === 'occupied' ? 'bg-blue-100 text-blue-700' :
+                                    room.lease_status === 'vacant' ? 'bg-slate-100 text-slate-600' :
+                                        room.lease_status === 'newlet' ? 'bg-pink-100 text-pink-700' :
+                                            'bg-red-100 text-red-700'
+                            )}>{STATUS_LABELS[room.lease_status]}</span>
+                        </div>
+                    </div>
+
+                    {room.needs_attention && room.attention_reason && (
+                        <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                            <AlertTriangle size={14} className="text-amber-500 shrink-0" />
+                            <span className="text-xs text-amber-700 font-medium">{room.attention_reason}</span>
+                        </div>
+                    )}
+
+                    {room.last_updated_by && (
+                        <p className="text-[10px] text-slate-400 text-right">
+                            最後更新：{room.last_updated_by}
+                        </p>
+                    )}
                 </div>
-            )}
+            </div>
         </div>
     );
 }
@@ -103,18 +134,18 @@ function RoomTimeline({ roomId, onClose }: { roomId: string; onClose: () => void
 export default function RoomsPage() {
     const [rooms, setRooms] = useState<Room[]>([]);
     const [loading, setLoading] = useState(true);
-    const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
-    const [floorFilter, setFloorFilter] = useState<number | null>(null);
-    const [statusFilter, setStatusFilter] = useState<string>('all');
-    const [searchQuery, setSearchQuery] = useState('');
+    const [filter, setFilter] = useState<FilterMode>('all');
+    const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+    const [error, setError] = useState<string | null>(null);
 
     const fetchRooms = useCallback(async () => {
         try {
             const res = await fetch('/api/rooms');
-            const data = await res.json();
-            setRooms(data);
-        } catch (e) {
-            console.error(e);
+            if (!res.ok) throw new Error('載入失敗');
+            setRooms(await res.json());
+            setError(null);
+        } catch (e: any) {
+            setError(e.message || '載入失敗');
         } finally {
             setLoading(false);
         }
@@ -122,137 +153,146 @@ export default function RoomsPage() {
 
     useEffect(() => { fetchRooms(); }, [fetchRooms]);
 
-    // Filter rooms
-    let filtered = rooms;
-    if (floorFilter) filtered = filtered.filter(r => r.floor === floorFilter);
-    if (statusFilter === 'needs_attention') {
-        filtered = filtered.filter(roomNeedsAttention);
-    } else if (statusFilter === 'has_work') {
-        filtered = filtered.filter(r => r.eng_status !== 'n_a' || r.clean_status !== 'n_a');
-    } else if (statusFilter === 'vacant') {
-        filtered = filtered.filter(r => r.lease_status === 'vacant');
-    }
-    if (searchQuery) {
-        filtered = filtered.filter(r => r.id.toLowerCase().includes(searchQuery.toLowerCase()));
-    }
+    useEffect(() => {
+        const interval = setInterval(fetchRooms, 5000);
+        return () => clearInterval(interval);
+    }, [fetchRooms]);
 
-    // Sort: rooms with status come first
-    filtered = filtered.sort((a, b) => {
-        const aNeedsAttention = roomNeedsAttention(a) ? 3 : 0;
-        const bNeedsAttention = roomNeedsAttention(b) ? 3 : 0;
-        const aScore = (a.eng_status !== 'n_a' ? 2 : 0) + (a.clean_status !== 'n_a' ? 1 : 0);
-        const bScore = (b.eng_status !== 'n_a' ? 2 : 0) + (b.clean_status !== 'n_a' ? 1 : 0);
-        if (bNeedsAttention !== aNeedsAttention) return bNeedsAttention - aNeedsAttention;
-        if (bScore !== aScore) return bScore - aScore;
-        return a.id.localeCompare(b.id, undefined, { numeric: true });
-    });
+    const roomMap = new Map(rooms.map(r => [r.id, r]));
 
-    // Stats
-    const stats = {
-        total: rooms.length,
-        needsAttention: rooms.filter(roomNeedsAttention).length,
-        vacant: rooms.filter(r => r.lease_status === 'vacant').length,
-        hasWork: rooms.filter(r => r.eng_status !== 'n_a' || r.clean_status !== 'n_a').length,
-    };
+    const filteredRoomIds = new Set(
+        rooms
+            .filter(r => {
+                switch (filter) {
+                    case 'attention': return r.needs_attention;
+                    case 'eng': return r.eng_status !== 'n_a';
+                    case 'clean': return r.clean_status !== 'n_a';
+                    case 'vacant': return r.lease_status === 'vacant' || r.lease_status === 'checkout';
+                    default: return true;
+                }
+            })
+            .map(r => r.id)
+    );
 
-    const floors = Array.from(new Set(rooms.map(r => r.floor))).sort((a, b) => a - b);
+    const attentionCount = rooms.filter(r => r.needs_attention).length;
+    const vacantCount = rooms.filter(r => r.lease_status === 'vacant' || r.lease_status === 'checkout').length;
+    const engActiveCount = rooms.filter(r => r.eng_status !== 'n_a').length;
+    const cleanActiveCount = rooms.filter(r => r.clean_status !== 'n_a').length;
 
     if (loading) {
         return (
             <div className="flex items-center justify-center h-[60vh]">
-                <div className="w-10 h-10 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                <div className="flex flex-col items-center gap-3">
+                    <div className="w-10 h-10 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                    <span className="text-sm text-slate-400">載入中...</span>
+                </div>
             </div>
         );
     }
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div>
-                <h1 className="page-title">房間看板</h1>
-                <p className="text-sm text-slate-500 mt-1">總覽全部房間工程、清潔和租務狀態</p>
+            <div className="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                    <h1 className="page-title">房間看板</h1>
+                    <p className="text-sm text-slate-500 mt-1">全棟 {rooms.length} 個單位即時狀態總覽</p>
+                </div>
             </div>
 
-            {/* Stats */}
+            {error && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2">
+                    <AlertTriangle size={16} className="text-red-500" />
+                    <span className="text-sm text-red-700">{error}</span>
+                </div>
+            )}
+
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 {[
-                    { label: '總房間數', value: stats.total, color: 'text-slate-700', bg: 'bg-white' },
-                    { label: '需要關注', value: stats.needsAttention, color: 'text-amber-700', bg: 'bg-amber-50' },
-                    { label: '空置中', value: stats.vacant, color: 'text-purple-700', bg: 'bg-purple-50' },
-                    { label: '工程/清潔中', value: stats.hasWork, color: 'text-blue-700', bg: 'bg-blue-50' },
+                    { label: '需要跟進', value: attentionCount, color: 'text-amber-700', bg: 'bg-amber-50', icon: AlertTriangle },
+                    { label: '空置/退房', value: vacantCount, color: 'text-slate-700', bg: 'bg-white', icon: Key },
+                    { label: '工程進行中', value: engActiveCount, color: 'text-amber-700', bg: 'bg-amber-50', icon: Wrench },
+                    { label: '清潔進行中', value: cleanActiveCount, color: 'text-emerald-700', bg: 'bg-emerald-50', icon: Sparkles },
                 ].map(stat => (
                     <div key={stat.label} className={cn('glass-card p-4', stat.bg)}>
-                        <p className="text-xs text-slate-500">{stat.label}</p>
-                        <p className={cn('text-2xl font-bold mt-1', stat.color)}>{stat.value}</p>
+                        <div className="flex items-center gap-1.5 mb-1">
+                            <stat.icon size={12} className="text-slate-400" />
+                            <p className="text-xs text-slate-500">{stat.label}</p>
+                        </div>
+                        <p className={cn('text-2xl font-bold', stat.color)}>{stat.value}</p>
                     </div>
                 ))}
             </div>
 
-            {/* Filters */}
-            <div className="flex flex-wrap items-center gap-3">
-                <div className="relative">
-                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={e => setSearchQuery(e.target.value)}
-                        placeholder="搜尋房號..."
-                        className="input-field pl-9 w-36"
-                    />
-                </div>
-
-                <select
-                    value={floorFilter || ''}
-                    onChange={e => setFloorFilter(e.target.value ? parseInt(e.target.value) : null)}
-                    className="input-field w-auto"
-                >
-                    <option value="">全部樓層</option>
-                    {floors.map(f => (
-                        <option key={f} value={f}>{f} 樓</option>
-                    ))}
-                </select>
-
-                <select
-                    value={statusFilter}
-                    onChange={e => setStatusFilter(e.target.value)}
-                    className="input-field w-auto"
-                >
-                    <option value="all">全部狀態</option>
-                    <option value="needs_attention">⚠️ 需要關注</option>
-                    <option value="has_work">🔧 工程/清潔中</option>
-                    <option value="vacant">🏠 空置</option>
-                </select>
-
-                <span className="text-xs text-slate-400 ml-auto">顯示 {filtered.length} / {rooms.length} 間</span>
+            <div className="flex items-center gap-2 flex-wrap">
+                <Filter size={14} className="text-slate-400" />
+                {([
+                    { key: 'all', label: '全部' },
+                    { key: 'attention', label: '需跟進' },
+                    { key: 'eng', label: '有工程' },
+                    { key: 'clean', label: '有清潔' },
+                    { key: 'vacant', label: '空置/退房' },
+                ] as { key: FilterMode; label: string }[]).map(f => (
+                    <button
+                        key={f.key}
+                        onClick={() => setFilter(f.key)}
+                        className={cn(
+                            'px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
+                            filter === f.key
+                                ? 'bg-blue-100 text-blue-700 shadow-sm'
+                                : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+                        )}
+                    >
+                        {f.label}
+                    </button>
+                ))}
             </div>
 
-            {/* Room Grid + Timeline */}
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                <div className={cn('space-y-1', selectedRoom ? 'xl:col-span-2' : 'xl:col-span-3')}>
-                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
-                        {filtered.map(room => (
-                            <RoomCard
-                                key={room.id}
-                                room={room}
-                                onClick={() => setSelectedRoom(selectedRoom === room.id ? null : room.id)}
-                                isSelected={selectedRoom === room.id}
-                            />
+            <div className="flex items-center gap-4 flex-wrap text-[10px] text-slate-500">
+                <span className="font-semibold">圖例：</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400" /> 完成</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400" /> 進行中</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400" /> 待處理</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-400" /> 待清潔</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-50 border border-amber-300 rounded" /> 需跟進</span>
+            </div>
+
+            <div className="glass-card p-4 overflow-x-auto">
+                <table className="w-full border-collapse">
+                    <thead>
+                        <tr>
+                            <th className="text-[10px] text-slate-400 font-medium p-1 text-left w-10">樓層</th>
+                            {UNITS.map(u => (
+                                <th key={u} className="text-[10px] text-slate-400 font-medium p-1 text-center">{u}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {FLOORS.map(floor => (
+                            <tr key={floor}>
+                                <td className="text-[10px] text-slate-500 font-semibold p-1 text-left">{floor}F</td>
+                                {UNITS.map(unit => {
+                                    const id = `${floor}${unit}`;
+                                    const room = roomMap.get(id);
+                                    const visible = filter === 'all' || filteredRoomIds.has(id);
+                                    return (
+                                        <td key={unit} className="p-0.5">
+                                            {visible ? (
+                                                <RoomCell room={room} onClick={setSelectedRoom} />
+                                            ) : (
+                                                <div className="w-full aspect-square rounded-lg bg-slate-50 opacity-20" />
+                                            )}
+                                        </td>
+                                    );
+                                })}
+                            </tr>
                         ))}
-                    </div>
-                    {filtered.length === 0 && (
-                        <div className="glass-card p-8 text-center">
-                            <LayoutGrid size={32} className="text-slate-300 mx-auto mb-3" />
-                            <p className="text-sm text-slate-400">沒有符合條件的房間</p>
-                        </div>
-                    )}
-                </div>
-
-                {selectedRoom && (
-                    <div>
-                        <RoomTimeline roomId={selectedRoom} onClose={() => setSelectedRoom(null)} />
-                    </div>
-                )}
+                    </tbody>
+                </table>
             </div>
+
+            {selectedRoom && (
+                <RoomDetail room={selectedRoom} onClose={() => setSelectedRoom(null)} />
+            )}
         </div>
     );
 }

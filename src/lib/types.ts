@@ -12,6 +12,8 @@ export type HandoffType = 'handoff' | 'request' | 'update' | 'trigger' | 'query'
 export type DocType = 'DRF' | 'TA' | 'Surrender' | 'Inventory' | 'Newlet';
 export type DocStatus = 'not_started' | 'preparing' | 'pending_sign' | 'with_tenant' | 'with_company' | 'completed';
 export type BookingType = 'viewing' | 'shooting' | 'event' | 'tenant_booking';
+export type FollowupStatus = 'open' | 'in_progress' | 'done' | 'dismissed';
+export type FollowupSourceType = 'suggestion' | 'manual';
 
 export interface Room {
     id: string;
@@ -81,6 +83,48 @@ export interface Booking {
     created_at: string;
 }
 
+export interface Followup {
+    id: string;
+    title: string;
+    description: string;
+    source_type: FollowupSourceType;
+    source_id: string;
+    priority: 'urgent' | 'warning' | 'info';
+    assigned_dept: DeptCode;
+    assigned_to: string | null;
+    related_rooms: string[];
+    status: FollowupStatus;
+    due_at: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export type ReviewStatus = 'pending' | 'approved' | 'corrected' | 'dismissed';
+
+export interface ParseReview {
+    id: string;
+    message_id: string;
+    raw_text: string;
+    sender_name: string;
+    sender_dept: DeptCode;
+    confidence: number;
+    suggested_rooms: string[];
+    suggested_action: string | null;
+    suggested_type: HandoffType | null;
+    suggested_from_dept: DeptCode | null;
+    suggested_to_dept: DeptCode | null;
+    reviewed_rooms: string[];
+    reviewed_action: string | null;
+    reviewed_type: HandoffType | null;
+    reviewed_from_dept: DeptCode | null;
+    reviewed_to_dept: DeptCode | null;
+    review_status: ReviewStatus;
+    reviewed_by: string | null;
+    reviewed_at: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
 export interface ParseResult {
     rooms: string[];
     action: string | null;
@@ -111,10 +155,15 @@ export const STATUS_LABELS: Record<string, string> = {
     vacant: '空置',
     newlet: '新租',
     checkout: '退房',
+    approved: '已批准',
+    corrected: '已修正',
     acknowledged: '已確認',
     not_started: '未開始',
     preparing: '準備中',
     pending_sign: '待簽署',
     with_tenant: '租客持有',
     with_company: '公司持有',
+    open: '待處理',
+    done: '已完成',
+    dismissed: '已略過',
 };
