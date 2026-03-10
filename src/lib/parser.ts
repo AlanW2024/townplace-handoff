@@ -5,14 +5,16 @@ import { DeptCode, HandoffType, ParseResult } from './types';
 // ===========================
 const STAFF_DEPT_MAP: Record<string, DeptCode> = {
     '𝕋𝕒𝕟𝕃': 'eng', 'tanl': 'eng', 'vic lee': 'eng', 'vic': 'eng',
+    '𝕋𝕒𝕟𝕃.𝕊𝕚𝕝𝕒𝕤': 'eng',
     'kaho': 'eng', 'g.a.r.y': 'eng', 'gary eng': 'eng',
+    'kaho tp soho': 'eng',
     'wing哥': 'eng', 'wing': 'eng', '阿豪': 'eng',
-    'michael': 'conc', 'josephine': 'conc', 'kelvin': 'conc',
-    '艾倫黃': 'conc', 'renee': 'conc', 'gary': 'conc', 'concierge': 'conc',
-    'ooo': 'hskp', '英姐': 'hskp', 'nana': 'hskp', '洛': 'hskp',
-    'don ho': 'clean', 'don': 'clean', 'hugo': 'clean',
+    'michael': 'conc', 'michael townplace': 'conc', 'josephine': 'conc', 'tp-josephine': 'conc', 'kelvin': 'conc', 'kelvin tpsoho': 'conc',
+    '艾倫黃': 'conc', 'renee': 'conc', 'renee tp soho': 'conc', 'gary': 'conc', 'concierge': 'conc', '[ concierge ] townplace soho': 'conc',
+    'ooo': 'hskp', '英姐': 'hskp', 'nana': 'hskp', '洛': 'hskp', 'lok': 'hskp', 'housekeeping': 'hskp',
+    'don ho': 'clean', 'don': 'clean', 'hugo': 'clean', '+852 9771 1310': 'clean',
     'karen townplace': 'mgmt', 'karen chan soho': 'mgmt', 'karen chan': 'mgmt',
-    'karen': 'mgmt', 'alice': 'mgmt',
+    'karen': 'mgmt', 'alice': 'mgmt', 'tp-alice': 'mgmt', 'tp staff karen(duty)': 'mgmt',
     'angel': 'lease', 'dennis': 'lease', 'cindy': 'lease', 'karen man': 'lease',
     'karen lung': 'comm', 'eva': 'comm',
     'eric': 'security',
@@ -22,6 +24,12 @@ const STAFF_DEPT_MAP: Record<string, DeptCode> = {
 // Room number regex
 // ===========================
 const ROOM_REGEX = /\b(\d{1,2}[A-Ma-m])\b/g;
+
+const HANDOFF_READY_REGEX = /(可清(?:潔)?|ready\s*for\s*clean(?:ing)?|不影響可清(?:潔)?)/i;
+const COMPLETION_REGEX = /(已?完成|done|完成咗)/i;
+const PROGRESS_WORK_REGEX = /(已調整|調整完成|已處理|處理完成|已安裝|安裝完成|已更換|更換完成|已修復|修復完成|回復正常|已吱膠|已打膠|logged)/i;
+const WORK_SCOPE_REGEX = /(油漆|門鉸|止回閥|掃口|熱水爐|安全掣|門柄|門手柄|牆身|天花|窗台|燈糟|大門|喉|閥|玻璃|床尾|膠|油|冷氣|爐|安裝|更換|調整|修補|修復|fix|logged)/i;
+const CONTINUATION_REGEX = /(明天|聽日|下週|下星期|再跟進|仲有|尚有|未完|未完成|差少少|等料|等待|繼續|需時|本週|下次|tomorrow|next week)/i;
 
 // ===========================
 // Action keyword patterns
@@ -194,6 +202,37 @@ export function parseWhatsAppMessage(
         };
     }
 
+    const isEngineeringContext = fromDept === 'eng' || /工程部|師傅/.test(normalizedText);
+    const hasExplicitHandoff = HANDOFF_READY_REGEX.test(normalizedText);
+    const hasCompletionWords = COMPLETION_REGEX.test(normalizedText);
+    const hasProgressWorkWords = PROGRESS_WORK_REGEX.test(normalizedText);
+    const hasScopeDetails = WORK_SCOPE_REGEX.test(normalizedText) || /[(（].+[)）]/.test(normalizedText);
+    const hasContinuationWords = CONTINUATION_REGEX.test(normalizedText);
+
+    // Engineering updates often mention completed work for the day, but that does not
+    // mean the whole room is ready for cleaning. Only explicit "可清/可清潔" is handoff.
+    if (rooms.length > 0 && isEngineeringContext && !hasExplicitHandoff && (hasCompletionWords || hasProgressWorkWords)) {
+        if (hasContinuationWords || (!hasScopeDetails && !hasProgressWorkWords)) {
+            return {
+                rooms,
+                action: '工程進度更新',
+                type: 'update',
+                from_dept: fromDept || 'eng',
+                to_dept: null,
+                confidence: 0.68,
+            };
+        }
+
+        return {
+            rooms,
+            action: '部分工程完成',
+            type: 'update',
+            from_dept: fromDept || 'eng',
+            to_dept: null,
+            confidence: 0.86,
+        };
+    }
+
     // 3. Match action patterns
     let bestMatch: ActionPattern | null = null;
     let bestConfidence = 0;
@@ -212,14 +251,14 @@ export function parseWhatsAppMessage(
     }
 
     if (!bestMatch) {
-        if (rooms.length > 0 && fromDept === 'eng' && /(已?完成|done)/i.test(normalizedText)) {
+        if (rooms.length > 0 && fromDept === 'eng' && COMPLETION_REGEX.test(normalizedText) && !hasExplicitHandoff) {
             return {
                 rooms,
-                action: '工程完成',
+                action: '工程進度更新',
                 type: 'update',
                 from_dept: 'eng',
                 to_dept: null,
-                confidence: 0.88,
+                confidence: 0.68,
             };
         }
 

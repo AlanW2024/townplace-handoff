@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, DeptCode } from './types';
+import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, AuditLog, DeptCode, ChatType } from './types';
 import { parseWhatsAppMessage } from './parser';
 
 export interface StoreData {
@@ -11,6 +11,7 @@ export interface StoreData {
     bookings: Booking[];
     followups: Followup[];
     parse_reviews: ParseReview[];
+    audit_logs: AuditLog[];
 }
 
 const STORE_PATH = path.join(process.cwd(), '.demo-store.json');
@@ -31,6 +32,24 @@ function normalizeRoom(room: Room): Room {
         needs_attention: needsAttention,
         attention_reason: room.attention_reason ?? (needsAttention ? '需要即時跟進' : null),
     };
+}
+
+function inferSeedChatMetadata(senderName: string, rawText: string): { chat_name: string; chat_type: ChatType } {
+    const name = senderName.toLowerCase();
+
+    if (name.includes('don ho') || name.includes('housekeeping')) {
+        return { chat_name: 'TPSH🤝Ascent', chat_type: 'group' };
+    }
+
+    if (name.includes('karen townplace') || name.includes('michael') || name.includes('josephine') || rawText.includes('是日跟進')) {
+        return { chat_name: 'TP Soho Con士', chat_type: 'group' };
+    }
+
+    if (name.includes('angel') || name.includes('dennis') || name.includes('cindy') || name.includes('karen man')) {
+        return { chat_name: senderName, chat_type: 'direct' };
+    }
+
+    return { chat_name: 'SOHO 前線🏡🧹🦫🐿️', chat_type: 'group' };
 }
 
 // Generate rooms: floors 3-32, units A-M (not all units on every floor)
@@ -112,12 +131,15 @@ function generateSeedMessages(): Omit<Message, 'parsed_room' | 'parsed_action' |
 
     return messages.map((message, index) => {
         const sentAt = new Date(baseTime.getTime() + message.mins * 60000);
+        const chatMeta = inferSeedChatMetadata(message.sender_name, message.raw_text);
         return {
             id: `msg-${String(index + 1).padStart(3, '0')}`,
             raw_text: message.raw_text,
             sender_name: message.sender_name,
             sender_dept: message.sender_dept,
-            wa_group: '工程+禮賓',
+            wa_group: chatMeta.chat_name,
+            chat_name: chatMeta.chat_name,
+            chat_type: chatMeta.chat_type,
             sent_at: sentAt.toISOString(),
             created_at: sentAt.toISOString(),
         };
@@ -196,6 +218,7 @@ function buildSeedStore(): StoreData {
         bookings: generateSeedBookings(),
         followups: [],
         parse_reviews: [],
+        audit_logs: [],
     };
 }
 
@@ -209,12 +232,21 @@ function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
             needs_attention: room.needs_attention ?? false,
             attention_reason: room.attention_reason ?? null,
         } as Room)),
-        messages: store.messages ?? seedStore.messages,
+        messages: (store.messages ?? seedStore.messages).map(message => {
+            const chatMeta = inferSeedChatMetadata(message.sender_name, message.raw_text);
+            return {
+                ...message,
+                wa_group: message.wa_group ?? chatMeta.chat_name,
+                chat_name: message.chat_name ?? message.wa_group ?? chatMeta.chat_name,
+                chat_type: message.chat_type ?? chatMeta.chat_type,
+            };
+        }),
         handoffs: store.handoffs ?? seedStore.handoffs,
         documents: store.documents ?? seedStore.documents,
         bookings: store.bookings ?? seedStore.bookings,
         followups: store.followups ?? seedStore.followups,
         parse_reviews: store.parse_reviews ?? seedStore.parse_reviews,
+        audit_logs: store.audit_logs ?? seedStore.audit_logs,
     };
 }
 

@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback } from 'react';
 import {
     SearchCheck, RefreshCw, AlertTriangle, Check, X, Edit3,
     Home, Clock, User, ChevronDown, ChevronUp
 } from 'lucide-react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { cn, formatDateTime } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
 import { DeptCode, DEPT_INFO, HandoffType, ReviewStatus } from '@/lib/types';
@@ -43,6 +45,8 @@ const STATUS_CONFIG: Record<ReviewStatus, { label: string; color: string; bg: st
 const ACTION_OPTIONS = [
     '工程完成 → 可清潔',
     '工程完成',
+    '部分工程完成',
+    '工程進度更新',
     '深層清潔完成',
     '清潔完成',
     '執修中',
@@ -70,7 +74,8 @@ const DEPT_OPTIONS: { value: DeptCode; label: string }[] = Object.entries(DEPT_I
 
 type FilterType = 'all' | ReviewStatus;
 
-export default function ReviewsPage() {
+function ReviewsPageContent() {
+    const searchParams = useSearchParams();
     const [reviews, setReviews] = useState<ParseReviewItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -105,6 +110,15 @@ export default function ReviewsPage() {
         const interval = setInterval(fetchReviews, 5000);
         return () => clearInterval(interval);
     }, [fetchReviews]);
+
+    useEffect(() => {
+        const nextStatus = searchParams.get('status');
+        if (nextStatus === 'pending' || nextStatus === 'approved' || nextStatus === 'corrected' || nextStatus === 'dismissed') {
+            setFilter(nextStatus);
+        } else {
+            setFilter('all');
+        }
+    }, [searchParams]);
 
     const handleRefresh = () => {
         setRefreshing(true);
@@ -208,27 +222,44 @@ export default function ReviewsPage() {
             </div>
 
             {/* Filter */}
-            <div className="flex gap-2 flex-wrap">
-                {([
-                    { key: 'all' as FilterType, label: '全部', count: reviews.length },
-                    { key: 'pending' as FilterType, label: '待覆核', count: pendingCount },
-                    { key: 'approved' as FilterType, label: '已批准', count: approvedCount },
-                    { key: 'corrected' as FilterType, label: '已修正', count: correctedCount },
-                    { key: 'dismissed' as FilterType, label: '已略過', count: dismissedCount },
-                ]).map(f => (
-                    <button
-                        key={f.key}
-                        onClick={() => setFilter(f.key)}
-                        className={cn(
-                            'px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
-                            filter === f.key
-                                ? 'bg-blue-600 text-white shadow-sm'
-                                : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
-                        )}
-                    >
-                        {f.label} ({f.count})
-                    </button>
-                ))}
+            <div className="space-y-2">
+                {searchParams.get('status') && (
+                    <div className="glass-card p-3 bg-blue-50/70 border border-blue-100 flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <p className="text-sm font-medium text-blue-800">已從通知進入人工覆核</p>
+                            <p className="text-xs text-blue-600 mt-1">目前只顯示與通知相符的覆核狀態</p>
+                        </div>
+                        <Link
+                            href="/reviews"
+                            className="text-xs font-medium text-blue-700 hover:text-blue-800 transition-colors"
+                        >
+                            清除篩選
+                        </Link>
+                    </div>
+                )}
+
+                <div className="flex gap-2 flex-wrap">
+                    {([
+                        { key: 'all' as FilterType, label: '全部', count: reviews.length },
+                        { key: 'pending' as FilterType, label: '待覆核', count: pendingCount },
+                        { key: 'approved' as FilterType, label: '已批准', count: approvedCount },
+                        { key: 'corrected' as FilterType, label: '已修正', count: correctedCount },
+                        { key: 'dismissed' as FilterType, label: '已略過', count: dismissedCount },
+                    ]).map(f => (
+                        <button
+                            key={f.key}
+                            onClick={() => setFilter(f.key)}
+                            className={cn(
+                                'px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                                filter === f.key
+                                    ? 'bg-blue-600 text-white shadow-sm'
+                                    : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                            )}
+                        >
+                            {f.label} ({f.count})
+                        </button>
+                    ))}
+                </div>
             </div>
 
             {/* Cards */}
@@ -469,5 +500,17 @@ export default function ReviewsPage() {
                 </div>
             )}
         </div>
+    );
+}
+
+export default function ReviewsPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center h-[60vh]">
+                <div className="w-10 h-10 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+            </div>
+        }>
+            <ReviewsPageContent />
+        </Suspense>
     );
 }

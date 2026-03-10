@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-    Bell, RefreshCw, AlertTriangle, AlertCircle, Info, Home, Clock
+    Bell, RefreshCw, AlertTriangle, AlertCircle, Info, Home, Clock, ChevronDown, ChevronUp, ArrowRight
 } from 'lucide-react';
 import Link from 'next/link';
 import { cn, formatDateTime } from '@/lib/utils';
@@ -62,11 +62,51 @@ const TYPE_COLORS: Record<NotificationType, string> = {
 
 type FilterType = 'all' | NotificationLevel;
 
+function buildRoomsHref(rooms: string[]): string {
+    const params = new URLSearchParams();
+    if (rooms.length > 0) {
+        params.set('highlight', rooms[0]);
+        params.set('rooms', rooms.join(','));
+    }
+    return `/rooms?${params.toString()}`;
+}
+
+function buildFollowupsHref(notification: Notification): string {
+    const params = new URLSearchParams();
+    params.set('active', 'true');
+    if (notification.type === 'followup_urgent') params.set('priority', 'urgent');
+    if (notification.related_rooms.length > 0) params.set('rooms', notification.related_rooms.join(','));
+    return `/followups?${params.toString()}`;
+}
+
+function getNotificationTarget(notification: Notification): { href: string; label: string } {
+    switch (notification.type) {
+        case 'doc_overdue':
+            return { href: '/documents', label: '查看文件' };
+        case 'review_pending':
+            return { href: '/reviews?status=pending', label: '查看待覆核' };
+        case 'followup_urgent':
+        case 'followup_due':
+            return { href: buildFollowupsHref(notification), label: '查看跟進事項' };
+        case 'handoff_timeout':
+            return { href: buildRoomsHref(notification.related_rooms), label: '查看交接相關房間' };
+        case 'booking_conflict':
+            return { href: buildRoomsHref(notification.related_rooms), label: '查看衝突房間' };
+        case 'checkout_pending':
+            return { href: buildRoomsHref(notification.related_rooms), label: '查看退房房間' };
+        case 'cleaning_waiting':
+            return { href: buildRoomsHref(notification.related_rooms), label: '查看待清潔房間' };
+        default:
+            return { href: '/notifications', label: '查看詳情' };
+    }
+}
+
 export default function NotificationsPage() {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState<FilterType>('all');
+    const [expandedId, setExpandedId] = useState<string | null>(null);
     const { showToast } = useToast();
 
     const fetchNotifications = useCallback(async () => {
@@ -177,6 +217,12 @@ export default function NotificationsPage() {
                         const levelCfg = LEVEL_CONFIG[notification.level];
                         const LevelIcon = levelCfg.icon;
                         const deptInfo = notification.related_dept ? DEPT_INFO[notification.related_dept] : null;
+                        const target = getNotificationTarget(notification);
+                        const isExpanded = expandedId === notification.id;
+                        const visibleRooms = isExpanded
+                            ? notification.related_rooms
+                            : notification.related_rooms.slice(0, 5);
+                        const hiddenRoomCount = Math.max(notification.related_rooms.length - visibleRooms.length, 0);
 
                         return (
                             <div
@@ -213,9 +259,9 @@ export default function NotificationsPage() {
                                         {/* Rooms + Time */}
                                         <div className="flex items-center gap-3 mt-2 flex-wrap">
                                             {notification.related_rooms.length > 0 && (
-                                                <span className="flex items-center gap-1">
-                                                    <Home size={11} className="text-slate-400" />
-                                                    {notification.related_rooms.map(room => (
+                                                <span className="flex items-center gap-1 flex-wrap">
+                                                    <Home size={11} className="text-slate-400 shrink-0" />
+                                                    {visibleRooms.map(room => (
                                                         <Link
                                                             key={room}
                                                             href={`/rooms?highlight=${room}`}
@@ -224,12 +270,35 @@ export default function NotificationsPage() {
                                                             {room}
                                                         </Link>
                                                     ))}
+                                                    {hiddenRoomCount > 0 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setExpandedId(isExpanded ? null : notification.id)}
+                                                            className="text-[11px] px-1.5 py-0.5 bg-white text-blue-600 rounded border border-blue-100 hover:bg-blue-50 transition-colors flex items-center gap-1"
+                                                        >
+                                                            {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                                                            {isExpanded ? '收起' : `再顯示 ${hiddenRoomCount} 間`}
+                                                        </button>
+                                                    )}
                                                 </span>
                                             )}
                                             <span className="flex items-center gap-1 text-[11px] text-slate-400">
                                                 <Clock size={10} />
                                                 {formatDateTime(notification.created_at)}
                                             </span>
+                                        </div>
+
+                                        <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+                                            <p className="text-[11px] text-slate-400">
+                                                由通知直接跳去相關頁面處理
+                                            </p>
+                                            <Link
+                                                href={target.href}
+                                                className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 hover:text-blue-800 transition-colors"
+                                            >
+                                                {target.label}
+                                                <ArrowRight size={12} />
+                                            </Link>
                                         </div>
                                     </div>
                                 </div>

@@ -42,6 +42,37 @@ const TYPE_LABELS: Record<NotificationType, string> = {
 
 export { TYPE_LABELS };
 
+function deptName(dept: DeptCode | null): string {
+    if (!dept) return '相關部門';
+    return DEPT_INFO[dept]?.name || dept;
+}
+
+function uniqueRooms(rooms: Array<string | null | undefined>): string[] {
+    return Array.from(new Set(rooms.filter((room): room is string => Boolean(room)))).sort(roomSort);
+}
+
+function roomSort(a: string, b: string): number {
+    const matchA = a.match(/^(\d+)([A-Z])$/);
+    const matchB = b.match(/^(\d+)([A-Z])$/);
+    if (!matchA || !matchB) return a.localeCompare(b);
+
+    const floorDiff = Number(matchA[1]) - Number(matchB[1]);
+    if (floorDiff !== 0) return floorDiff;
+    return matchA[2].localeCompare(matchB[2]);
+}
+
+function formatRoomList(rooms: string[], limit = 5): string {
+    if (rooms.length === 0) return '未指定單位';
+    const preview = rooms.slice(0, limit).join('、');
+    return rooms.length > limit ? `${preview} 等 ${rooms.length} 間單位` : preview;
+}
+
+function latestDate(values: string[]): string {
+    return values.reduce((latest, current) =>
+        new Date(current).getTime() > new Date(latest).getTime() ? current : latest
+    );
+}
+
 export function generateNotifications(): Notification[] {
     const store = getStore();
     const now = Date.now();
@@ -50,56 +81,73 @@ export function generateNotifications(): Notification[] {
 
     const makeId = () => `notif-${++counter}`;
 
-    // Rule 1: Handoff timeout — pending handoffs > 2 hours
+    // Rule 1: Handoff timeout — aggregate by receiving department
     const pendingHandoffs = store.handoffs.filter(h => h.status === 'pending');
-    for (const ho of pendingHandoffs) {
-        const age = now - new Date(ho.created_at).getTime();
-        const hours = age / (1000 * 60 * 60);
-        if (hours >= 2) {
-            const fromDept = DEPT_INFO[ho.from_dept]?.name || ho.from_dept;
-            const toDept = DEPT_INFO[ho.to_dept]?.name || ho.to_dept;
-            notifications.push({
-                id: makeId(),
-                type: 'handoff_timeout',
-                level: 'critical',
-                title: `${ho.room_id} 交接超時`,
-                body: `${fromDept} → ${toDept} 的交接已等待 ${Math.floor(hours)} 小時未確認。`,
-                related_rooms: [ho.room_id],
-                related_dept: ho.to_dept,
-                created_at: ho.created_at,
-            });
-        }
+    const timedOutHandoffs = pendingHandoffs.filter(
+        h => now - new Date(h.created_at).getTime() >= 2 * 60 * 60 * 1000
+    );
+    const handoffGroups = new Map<DeptCode, typeof timedOutHandoffs>();
+    for (const handoff of timedOutHandoffs) {
+        const group = handoffGroups.get(handoff.to_dept) || [];
+        group.push(handoff);
+        handoffGroups.set(handoff.to_dept, group);
+    }
+    for (const [dept, handoffs] of Array.from(handoffGroups.entries())) {
+        const rooms = uniqueRooms(handoffs.map(h => h.room_id));
+        const longestHours = Math.max(
+            ...handoffs.map(h => Math.floor((now - new Date(h.created_at).getTime()) / (1000 * 60 * 60)))
+        );
+        notifications.push({
+            id: makeId(),
+            type: 'handoff_timeout',
+            level: 'critical',
+            title: `${handoffs.length} 個交接超時未確認`,
+            body: `${deptName(dept)}有 ${handoffs.length} 個待確認交接，涉及 ${formatRoomList(rooms)}。最久已等待 ${longestHours} 小時。`,
+            related_rooms: rooms,
+            related_dept: dept,
+            created_at: latestDate(handoffs.map(h => h.created_at)),
+        });
     }
 
-    // Rule 2: Document overdue — days_outstanding > 3
-    for (const doc of store.documents) {
-        if (doc.status === 'completed') continue;
-        if (doc.days_outstanding > 5) {
-            notifications.push({
-                id: makeId(),
-                type: 'doc_overdue',
-                level: 'critical',
-                title: `${doc.room_id} ${doc.doc_type} 嚴重超期`,
-                body: `已超過 ${doc.days_outstanding} 天未完成。目前持有人：${doc.current_holder || '未指定'}。`,
-                related_rooms: [doc.room_id],
-                related_dept: 'lease',
-                created_at: doc.updated_at,
-            });
-        } else if (doc.days_outstanding > 3) {
-            notifications.push({
-                id: makeId(),
-                type: 'doc_overdue',
-                level: 'warning',
-                title: `${doc.room_id} ${doc.doc_type} 處理偏慢`,
-                body: `已 ${doc.days_outstanding} 天。持有人：${doc.current_holder || '未指定'}。`,
-                related_rooms: [doc.room_id],
-                related_dept: 'lease',
-                created_at: doc.updated_at,
-            });
-        }
+    // Rule 2: Document overdue — aggregate by severity
+    const activeDocuments = store.documents.filter(doc => doc.status !== 'completed');
+    const criticalDocs = activeDocuments.filter(doc => doc.days_outstanding > 5);
+    const warningDocs = activeDocuments.filter(doc => doc.days_outstanding > 3 && doc.days_outstanding <= 5);
+    if (criticalDocs.length > 0) {
+        const rooms = uniqueRooms(criticalDocs.map(doc => doc.room_id));
+        const maxDays = Math.max(...criticalDocs.map(doc => doc.days_outstanding));
+        notifications.push({
+            id: makeId(),
+            type: 'doc_overdue',
+            level: 'critical',
+            title: `${criticalDocs.length} 份文件嚴重超期`,
+            body: `涉及 ${formatRoomList(rooms)}，最長已超過 ${maxDays} 天。建議優先由租務或禮賓跟進。`,
+            related_rooms: rooms,
+            related_dept: 'lease',
+            created_at: latestDate(criticalDocs.map(doc => doc.updated_at)),
+        });
+    }
+    if (warningDocs.length > 0) {
+        const rooms = uniqueRooms(warningDocs.map(doc => doc.room_id));
+        notifications.push({
+            id: makeId(),
+            type: 'doc_overdue',
+            level: 'warning',
+            title: `${warningDocs.length} 份文件處理偏慢`,
+            body: `涉及 ${formatRoomList(rooms)}。文件已超過 3 天未完成，建議盡快確認持有人與進度。`,
+            related_rooms: rooms,
+            related_dept: 'lease',
+            created_at: latestDate(warningDocs.map(doc => doc.updated_at)),
+        });
     }
 
-    // Rule 3: Booking conflict — room has booking but not ready
+    // Rule 3: Booking conflict — aggregate all room readiness conflicts
+    const bookingConflicts: Array<{
+        room_id: string;
+        dept: DeptCode;
+        reasons: string[];
+        created_at: string;
+    }> = [];
     for (const booking of store.bookings) {
         if (!booking.room_id) continue;
         const room = store.rooms.find(r => r.id === booking.room_id);
@@ -112,24 +160,31 @@ export function generateNotifications(): Notification[] {
             const reasons = [];
             if (engNotReady) reasons.push('工程未完成');
             if (cleanNotReady) reasons.push('清潔未完成');
-            const typeLabel = booking.booking_type === 'viewing' ? '睇樓' :
-                booking.booking_type === 'shooting' ? '拍攝' : '活動';
-
-            notifications.push({
-                id: makeId(),
-                type: 'booking_conflict',
-                level: 'critical',
-                title: `${room.id} 有「${typeLabel}」預約但未就緒`,
-                body: `${reasons.join('、')}。預約人：${booking.booked_by}。`,
-                related_rooms: [room.id],
-                related_dept: booking.dept,
+            bookingConflicts.push({
+                room_id: room.id,
+                dept: booking.dept,
+                reasons,
                 created_at: booking.created_at,
             });
         }
     }
+    if (bookingConflicts.length > 0) {
+        const rooms = uniqueRooms(bookingConflicts.map(conflict => conflict.room_id));
+        const reasons = Array.from(new Set(bookingConflicts.flatMap(conflict => conflict.reasons)));
+        notifications.push({
+            id: makeId(),
+            type: 'booking_conflict',
+            level: 'critical',
+            title: `${bookingConflicts.length} 個預約與房態衝突`,
+            body: `涉及 ${formatRoomList(rooms)}。主要原因：${reasons.join('、')}。建議優先由租務協調。`,
+            related_rooms: rooms,
+            related_dept: 'lease',
+            created_at: latestDate(bookingConflicts.map(conflict => conflict.created_at)),
+        });
+    }
 
-    // Rule 4: Pending reviews — parse reviews awaiting human review
-    const pendingReviews = store.parse_reviews.filter(r => r.review_status === 'pending');
+    // Rule 4: Pending reviews — already grouped as a single control notification
+    const pendingReviews = store.parse_reviews.filter(review => review.review_status === 'pending');
     if (pendingReviews.length > 0) {
         notifications.push({
             id: makeId(),
@@ -137,91 +192,115 @@ export function generateNotifications(): Notification[] {
             level: 'warning',
             title: `${pendingReviews.length} 條訊息待人工覆核`,
             body: `有 ${pendingReviews.length} 條低信心度訊息需要人工檢查，相關操作已暫緩。`,
-            related_rooms: Array.from(new Set(pendingReviews.flatMap(r => r.suggested_rooms))),
+            related_rooms: uniqueRooms(pendingReviews.flatMap(review => review.suggested_rooms)),
             related_dept: 'mgmt',
-            created_at: pendingReviews[0].created_at,
+            created_at: latestDate(pendingReviews.map(review => review.created_at)),
         });
     }
 
-    // Rule 5: Urgent followups — open or in_progress with urgent priority
+    // Rule 5: Urgent followups — aggregate by assigned department
     const urgentFollowups = store.followups.filter(
-        f => f.priority === 'urgent' && (f.status === 'open' || f.status === 'in_progress')
+        followup => followup.priority === 'urgent' && (followup.status === 'open' || followup.status === 'in_progress')
     );
-    for (const fu of urgentFollowups) {
+    const urgentFollowupGroups = new Map<DeptCode, typeof urgentFollowups>();
+    for (const followup of urgentFollowups) {
+        const group = urgentFollowupGroups.get(followup.assigned_dept) || [];
+        group.push(followup);
+        urgentFollowupGroups.set(followup.assigned_dept, group);
+    }
+    for (const [dept, followups] of Array.from(urgentFollowupGroups.entries())) {
+        const rooms = uniqueRooms(followups.flatMap(followup => followup.related_rooms));
         notifications.push({
             id: makeId(),
             type: 'followup_urgent',
             level: 'critical',
-            title: `緊急跟進：${fu.title}`,
-            body: fu.description.slice(0, 100) + (fu.description.length > 100 ? '...' : ''),
-            related_rooms: fu.related_rooms,
-            related_dept: fu.assigned_dept,
-            created_at: fu.created_at,
+            title: `${followups.length} 項緊急跟進未完成`,
+            body: `${deptName(dept)}仍有 ${followups.length} 項緊急任務未完成，涉及 ${formatRoomList(rooms)}。`,
+            related_rooms: rooms,
+            related_dept: dept,
+            created_at: latestDate(followups.map(followup => followup.created_at)),
         });
     }
 
-    // Rule 5b: Followup due_at approaching — within 24 hours or overdue
+    // Rule 5b: Followup due_at approaching — aggregate by state and department
     const activeFollowups = store.followups.filter(
-        f => f.due_at && (f.status === 'open' || f.status === 'in_progress')
+        followup => followup.due_at && (followup.status === 'open' || followup.status === 'in_progress')
     );
-    for (const fu of activeFollowups) {
-        const dueTime = new Date(fu.due_at!).getTime();
+    const dueGroups = new Map<string, typeof activeFollowups>();
+    for (const followup of activeFollowups) {
+        const dueTime = new Date(followup.due_at as string).getTime();
         const diff = dueTime - now;
-        const hours24 = 24 * 60 * 60 * 1000;
+        if (diff > 24 * 60 * 60 * 1000) continue;
 
-        if (diff <= hours24) {
-            const isOverdue = diff < 0;
-            const hoursLeft = Math.abs(Math.floor(diff / (1000 * 60 * 60)));
-            notifications.push({
-                id: makeId(),
-                type: 'followup_due',
-                level: isOverdue ? 'critical' : 'warning',
-                title: isOverdue
-                    ? `跟進事項已過期：${fu.title}`
-                    : `跟進事項即將到期：${fu.title}`,
-                body: isOverdue
-                    ? `已過期 ${hoursLeft} 小時。部門：${DEPT_INFO[fu.assigned_dept]?.name || fu.assigned_dept}。`
-                    : `將於 ${hoursLeft} 小時內到期。部門：${DEPT_INFO[fu.assigned_dept]?.name || fu.assigned_dept}。`,
-                related_rooms: fu.related_rooms,
-                related_dept: fu.assigned_dept,
-                created_at: fu.created_at,
-            });
-        }
+        const state = diff < 0 ? 'overdue' : 'soon';
+        const groupKey = `${state}:${followup.assigned_dept}`;
+        const group = dueGroups.get(groupKey) || [];
+        group.push(followup);
+        dueGroups.set(groupKey, group);
+    }
+    for (const [groupKey, followups] of Array.from(dueGroups.entries())) {
+        const [state, dept] = groupKey.split(':') as ['overdue' | 'soon', DeptCode];
+        const rooms = uniqueRooms(followups.flatMap(followup => followup.related_rooms));
+        const hourOffsets = followups.map(followup =>
+            Math.abs(Math.floor((new Date(followup.due_at as string).getTime() - now) / (1000 * 60 * 60)))
+        );
+        const edgeHours = state === 'overdue' ? Math.max(...hourOffsets) : Math.min(...hourOffsets);
+        notifications.push({
+            id: makeId(),
+            type: 'followup_due',
+            level: state === 'overdue' ? 'critical' : 'warning',
+            title: state === 'overdue'
+                ? `${followups.length} 項跟進事項已過期`
+                : `${followups.length} 項跟進事項 24 小時內到期`,
+            body: state === 'overdue'
+                ? `${deptName(dept)}有 ${followups.length} 項任務已過期，涉及 ${formatRoomList(rooms)}。最久已過期 ${edgeHours} 小時。`
+                : `${deptName(dept)}有 ${followups.length} 項任務即將到期，涉及 ${formatRoomList(rooms)}。最早 ${edgeHours} 小時內到期。`,
+            related_rooms: rooms,
+            related_dept: dept,
+            created_at: latestDate(followups.map(followup => followup.created_at)),
+        });
     }
 
-    // Rule 6: Checkout pending — rooms in checkout status
-    const checkoutRooms = store.rooms.filter(r => r.lease_status === 'checkout');
-    for (const room of checkoutRooms) {
+    // Rule 6: Checkout pending — aggregate all checkout units
+    const checkoutRooms = store.rooms.filter(room => room.lease_status === 'checkout');
+    if (checkoutRooms.length > 0) {
+        const rooms = uniqueRooms(checkoutRooms.map(room => room.id));
         notifications.push({
             id: makeId(),
             type: 'checkout_pending',
             level: 'warning',
-            title: `${room.id} 退房待處理`,
-            body: `此單位已退房，需安排檢查及後續跟進。`,
-            related_rooms: [room.id],
+            title: `${checkoutRooms.length} 間退房單位待處理`,
+            body: `涉及 ${formatRoomList(rooms)}。建議安排退房檢查、文件與後續維修清潔。`,
+            related_rooms: rooms,
             related_dept: 'conc',
-            created_at: room.last_updated_at,
+            created_at: latestDate(checkoutRooms.map(room => room.last_updated_at)),
         });
     }
 
-    // Rule 7: Cleaning waiting — eng=completed + clean=pending
-    const waitingClean = store.rooms.filter(r => r.eng_status === 'completed' && r.clean_status === 'pending');
-    for (const room of waitingClean) {
+    // Rule 7: Cleaning waiting — aggregate all rooms waiting for cleaning
+    const waitingClean = store.rooms.filter(room => room.eng_status === 'completed' && room.clean_status === 'pending');
+    if (waitingClean.length > 0) {
+        const rooms = uniqueRooms(waitingClean.map(room => room.id));
         notifications.push({
             id: makeId(),
             type: 'cleaning_waiting',
             level: 'warning',
-            title: `${room.id} 等待清潔`,
-            body: `工程已完成，清潔尚未開始。`,
-            related_rooms: [room.id],
+            title: `${waitingClean.length} 間單位等待清潔`,
+            body: `工程已完成但清潔未開始，涉及 ${formatRoomList(rooms)}。建議清潔部集中排程。`,
+            related_rooms: rooms,
             related_dept: 'clean',
-            created_at: room.last_updated_at,
+            created_at: latestDate(waitingClean.map(room => room.last_updated_at)),
         });
     }
 
-    // Sort: critical first, then warning, then info
+    // Sort: critical first, then latest items first within each level
     const levelOrder: Record<NotificationLevel, number> = { critical: 0, warning: 1, info: 2 };
-    notifications.sort((a, b) => levelOrder[a.level] - levelOrder[b.level]);
+    notifications.sort((a, b) => {
+        if (levelOrder[a.level] !== levelOrder[b.level]) {
+            return levelOrder[a.level] - levelOrder[b.level];
+        }
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
 
     return notifications;
 }

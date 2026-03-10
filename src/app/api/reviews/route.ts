@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getStore, saveStore } from '@/lib/store';
 import { ReviewStatus, Handoff, ParseReview } from '@/lib/types';
+import { applyRoomStatusUpdate } from '@/lib/ingest';
 
 export const dynamic = 'force-dynamic';
 
@@ -117,56 +118,11 @@ export async function PUT(request: Request) {
             }
         }
 
-        // Apply room status updates
+        // Apply room status updates using the same logic as normal ingestion
         for (const roomId of rooms) {
             const room = store.rooms.find(r => r.id === roomId);
             if (!room || !action) continue;
-
-            room.last_updated_at = now;
-            room.last_updated_by = review.sender_name;
-
-            switch (action) {
-                case '工程完成 → 可清潔':
-                    room.eng_status = 'completed';
-                    room.clean_status = 'pending';
-                    room.needs_attention = true;
-                    room.attention_reason = '待清潔接手';
-                    break;
-                case '工程完成':
-                    room.eng_status = 'completed';
-                    room.attention_reason = null;
-                    break;
-                case '深層清潔完成':
-                case '清潔完成':
-                    room.clean_status = 'completed';
-                    if (room.lease_status !== 'checkout') {
-                        room.needs_attention = false;
-                        room.attention_reason = null;
-                    }
-                    break;
-                case '執修中':
-                    room.eng_status = 'in_progress';
-                    room.needs_attention = true;
-                    room.attention_reason = '工程跟進中';
-                    break;
-                case '報修 — 需要維修':
-                    room.eng_status = 'pending';
-                    room.needs_attention = true;
-                    room.attention_reason = '待工程處理';
-                    break;
-                case '退房':
-                    room.lease_status = 'checkout';
-                    room.needs_attention = true;
-                    room.attention_reason = '退房後待跟進';
-                    break;
-                case '入住':
-                    room.lease_status = 'newlet';
-                    room.needs_attention = true;
-                    room.attention_reason = '入住前準備';
-                    break;
-                default:
-                    break;
-            }
+            applyRoomStatusUpdate(room, action, fromDept, review.sender_name);
         }
     }
 

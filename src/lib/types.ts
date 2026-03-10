@@ -9,11 +9,14 @@ export type CleanStatus = 'completed' | 'in_progress' | 'pending' | 'n_a';
 export type LeaseStatus = 'occupied' | 'vacant' | 'newlet' | 'checkout';
 export type HandoffStatus = 'pending' | 'acknowledged' | 'completed';
 export type HandoffType = 'handoff' | 'request' | 'update' | 'trigger' | 'query' | 'escalation';
+export type ChatType = 'group' | 'direct';
 export type DocType = 'DRF' | 'TA' | 'Surrender' | 'Inventory' | 'Newlet';
 export type DocStatus = 'not_started' | 'preparing' | 'pending_sign' | 'with_tenant' | 'with_company' | 'completed';
 export type BookingType = 'viewing' | 'shooting' | 'event' | 'tenant_booking';
 export type FollowupStatus = 'open' | 'in_progress' | 'done' | 'dismissed';
 export type FollowupSourceType = 'suggestion' | 'manual';
+export type AuditEntityType = 'document' | 'followup';
+export type AuditAction = 'created' | 'status_advanced' | 'status_reverted' | 'status_changed' | 'field_updated';
 
 export interface Room {
     id: string;
@@ -39,6 +42,8 @@ export interface Message {
     sender_name: string;
     sender_dept: DeptCode;
     wa_group: string;
+    chat_name: string;
+    chat_type: ChatType;
     sent_at: string;
     parsed_room: string[];
     parsed_action: string | null;
@@ -97,6 +102,18 @@ export interface Followup {
     due_at: string | null;
     created_at: string;
     updated_at: string;
+}
+
+export interface AuditLog {
+    id: string;
+    entity_type: AuditEntityType;
+    entity_id: string;
+    action: AuditAction;
+    actor: string;
+    reason: string;
+    from_status: string | null;
+    to_status: string | null;
+    created_at: string;
 }
 
 export type ReviewStatus = 'pending' | 'approved' | 'corrected' | 'dismissed';
@@ -166,4 +183,12 @@ export const STATUS_LABELS: Record<string, string> = {
     open: '待處理',
     done: '已完成',
     dismissed: '已略過',
+};
+
+export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
+    created: '建立',
+    status_advanced: '推進',
+    status_reverted: '退回',
+    status_changed: '狀態更新',
+    field_updated: '欄位更新',
 };

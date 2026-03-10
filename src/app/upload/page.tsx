@@ -8,6 +8,8 @@ interface UploadResult {
     total_lines: number;
     parsed_messages: number;
     handoffs_created: number;
+    chat_name: string;
+    chat_type: 'group' | 'direct';
 }
 
 export default function UploadPage() {
@@ -15,6 +17,8 @@ export default function UploadPage() {
     const [uploading, setUploading] = useState(false);
     const [result, setResult] = useState<UploadResult | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [chatName, setChatName] = useState('');
+    const [chatType, setChatType] = useState<'group' | 'direct'>('group');
     const fileRef = useRef<HTMLInputElement>(null);
 
     const handleUpload = async (file: File) => {
@@ -24,6 +28,8 @@ export default function UploadPage() {
         try {
             const formData = new FormData();
             formData.append('file', file);
+            if (chatName.trim()) formData.append('chat_name', chatName.trim());
+            formData.append('chat_type', chatType);
             const res = await fetch('/api/upload', { method: 'POST', body: formData });
             if (!res.ok) throw new Error('上傳失敗');
             const data = await res.json();
@@ -61,8 +67,38 @@ export default function UploadPage() {
                     <li className="flex items-start gap-2"><span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">1</span>打開 WhatsApp 群組對話</li>
                     <li className="flex items-start gap-2"><span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">2</span>點擊右上角 ⋮ → 更多 → 匯出對話</li>
                     <li className="flex items-start gap-2"><span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">3</span>選擇「不包含媒體」</li>
-                    <li className="flex items-start gap-2"><span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">4</span>將 .txt 檔案上傳到下方區域</li>
+                    <li className="flex items-start gap-2"><span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">4</span>可直接上傳 WhatsApp 匯出的 `.txt` 或 `.zip`</li>
                 </ol>
+            </div>
+
+            <div className="glass-card p-5 space-y-4">
+                <div>
+                    <h2 className="text-sm font-semibold text-slate-700">對話來源設定</h2>
+                    <p className="text-xs text-slate-500 mt-1">C 版 prototype 會將每次匯入視為一個 chat source，可覆寫群組/直聊名稱。</p>
+                </div>
+                <div className="grid md:grid-cols-[160px_1fr] gap-3">
+                    <div>
+                        <label className="text-xs text-slate-500 block mb-1.5">對話類型</label>
+                        <select
+                            value={chatType}
+                            onChange={e => setChatType(e.target.value as 'group' | 'direct')}
+                            className="input-field w-full"
+                        >
+                            <option value="group">群組</option>
+                            <option value="direct">直聊</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-xs text-slate-500 block mb-1.5">對話名稱（可留空自動用檔名）</label>
+                        <input
+                            type="text"
+                            value={chatName}
+                            onChange={e => setChatName(e.target.value)}
+                            placeholder="例如：SOHO 前線 / Angel / TPSH🤝Ascent"
+                            className="input-field w-full"
+                        />
+                    </div>
+                </div>
             </div>
 
             {/* Drop zone */}
@@ -77,7 +113,7 @@ export default function UploadPage() {
                     uploading && 'pointer-events-none opacity-50'
                 )}
             >
-                <input ref={fileRef} type="file" accept=".txt,.text" onChange={onFileSelect} className="hidden" />
+                <input ref={fileRef} type="file" accept=".txt,.text,.zip" onChange={onFileSelect} className="hidden" />
                 {uploading ? (
                     <div className="flex flex-col items-center gap-3">
                         <div className="w-10 h-10 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
@@ -88,8 +124,8 @@ export default function UploadPage() {
                         <div className="w-16 h-16 rounded-2xl bg-blue-100 flex items-center justify-center">
                             <Upload size={28} className="text-blue-500" />
                         </div>
-                        <p className="text-sm font-semibold text-slate-700">拖放 .txt 檔案到此處</p>
-                        <p className="text-xs text-slate-400">或點擊選擇檔案</p>
+                        <p className="text-sm font-semibold text-slate-700">拖放 WhatsApp 匯出檔到此處</p>
+                        <p className="text-xs text-slate-400">支援 `.txt` 和 `.zip`，media 會自動略過</p>
                     </div>
                 )}
             </div>
@@ -100,6 +136,12 @@ export default function UploadPage() {
                     <div className="flex items-center gap-2 mb-4">
                         <CheckCircle size={18} className="text-emerald-500" />
                         <span className="text-sm font-semibold text-emerald-700">上傳成功！</span>
+                    </div>
+                    <div className="mb-4 flex items-center gap-2 flex-wrap">
+                        <span className="status-badge bg-slate-100 text-slate-700">
+                            {result.chat_type === 'group' ? '群組' : '直聊'}
+                        </span>
+                        <span className="status-badge bg-blue-100 text-blue-700">{result.chat_name}</span>
                     </div>
                     <div className="grid grid-cols-3 gap-4">
                         <div className="text-center p-3 bg-slate-50 rounded-xl">

@@ -1,4 +1,4 @@
-import { Message, Handoff, ParseReview, DeptCode } from './types';
+import { Message, Handoff, ParseReview, DeptCode, ChatType } from './types';
 import { parseWhatsAppMessage, getDeptFromSender } from './parser';
 import { getStore, saveStore } from './store';
 
@@ -12,6 +12,8 @@ interface IngestInput {
     sender_name: string;
     sender_dept?: DeptCode | null;
     wa_group?: string;
+    chat_name?: string;
+    chat_type?: ChatType;
     sent_at?: string;       // ISO string; defaults to now
     id_prefix?: string;     // e.g. "msg" or "msg-upload"
 }
@@ -52,6 +54,23 @@ function isSummaryMessage(rawText: string, parsed: { rooms: string[]; action: st
     return false;
 }
 
+function isAmbiguousEngineeringCompletion(
+    rawText: string,
+    parsed: { rooms: string[]; action: string | null; from_dept: DeptCode | null; confidence: number }
+): boolean {
+    const text = rawText.trim();
+    const isEngineeringContext = parsed.from_dept === 'eng' || /工程部|師傅/.test(text);
+    const hasCompletionWords = /(已?完成|done|完成咗)/i.test(text);
+    const hasExplicitHandoff = /(可清(?:潔)?|ready\s*for\s*clean(?:ing)?|不影響可清(?:潔)?)/i.test(text);
+
+    if (!isEngineeringContext || parsed.rooms.length === 0 || !hasCompletionWords || hasExplicitHandoff) {
+        return false;
+    }
+
+    // Parser already considers this uncertain. Keep it out of auto-handoff / auto-clean.
+    return parsed.action === '工程進度更新' && parsed.confidence < 0.75;
+}
+
 export function ingestMessage(input: IngestInput): IngestResult {
     const store = getStore();
     ingestCounter++;
@@ -71,13 +90,17 @@ export function ingestMessage(input: IngestInput): IngestResult {
     const now = new Date().toISOString();
     const sentAt = input.sent_at || now;
     const prefix = input.id_prefix || 'msg';
+    const chatName = input.chat_name || input.wa_group || 'SOHO 前線🏡🧹🦫🐿️';
+    const chatType = input.chat_type || 'group';
 
     const msg: Message = {
         id: `${prefix}-${Date.now()}-${ingestCounter}`,
         raw_text: input.raw_text,
         sender_name: input.sender_name,
         sender_dept: senderDept || 'conc',
-        wa_group: input.wa_group || '工程+禮賓',
+        wa_group: chatName,
+        chat_name: chatName,
+        chat_type: chatType,
         sent_at: sentAt,
         parsed_room: parsed.rooms,
         parsed_action: parsed.action,
@@ -91,7 +114,8 @@ export function ingestMessage(input: IngestInput): IngestResult {
 
     // 5. Check if review is needed
     const isSummary = isSummaryMessage(input.raw_text, parsed);
-    const needsReview = parsed.confidence < 0.75 || !parsed.action || isSummary;
+    const ambiguousCompletion = isAmbiguousEngineeringCompletion(input.raw_text, parsed);
+    const needsReview = parsed.confidence < 0.75 || !parsed.action || isSummary || ambiguousCompletion;
     let review: ParseReview | null = null;
 
     if (needsReview) {
@@ -166,6 +190,7 @@ export function ingestMessage(input: IngestInput): IngestResult {
  * Update room status based on the parsed action.
  * Rules:
  *  - 工程完成 → 可清潔: eng=completed, clean=pending
+ *  - 部分工程完成 / 工程進度更新: eng=in_progress, not ready for cleaning
  *  - 深層清潔完成 / 清潔完成: clean=completed
  *  - 執修中: eng=in_progress
  *  - 報修 — 需要維修: eng=pending
@@ -175,7 +200,7 @@ export function ingestMessage(input: IngestInput): IngestResult {
  *  - 吱膠工程: eng=in_progress (minor work)
  *  - 查詢進度: no status change, but mark room updated
  */
-function applyRoomStatusUpdate(
+export function applyRoomStatusUpdate(
     room: {
         eng_status: string;
         clean_status: string;
@@ -204,7 +229,22 @@ function applyRoomStatusUpdate(
             break;
         case '工程完成':
             room.eng_status = 'completed';
+            room.needs_attention = false;
             room.attention_reason = null;
+            break;
+        case '部分工程完成':
+            if (room.clean_status !== 'pending') {
+                room.eng_status = 'in_progress';
+            }
+            room.needs_attention = true;
+            room.attention_reason = '已完成部分工程，未可清';
+            break;
+        case '工程進度更新':
+            if (room.clean_status !== 'pending') {
+                room.eng_status = 'in_progress';
+            }
+            room.needs_attention = true;
+            room.attention_reason = '工程仍在進行，未可清';
             break;
         case '深層清潔完成':
         case '清潔完成':

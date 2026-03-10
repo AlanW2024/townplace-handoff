@@ -1,30 +1,27 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback } from 'react';
 import {
     ListChecks, RefreshCw, AlertTriangle, AlertCircle, Info,
-    Home, Play, CheckCircle2, XCircle, Clock, Lightbulb, User
+    Home, Play, CheckCircle2, XCircle, Clock, Lightbulb, User, Undo2, History
 } from 'lucide-react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { cn, formatDateTime } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
-import { DeptCode, DEPT_INFO, FollowupStatus } from '@/lib/types';
+import {
+    AuditLog,
+    AUDIT_ACTION_LABELS,
+    DeptCode,
+    DEPT_INFO,
+    Followup,
+    FollowupStatus,
+} from '@/lib/types';
 
-interface Followup {
-    id: string;
-    title: string;
-    description: string;
-    source_type: string;
-    source_id: string;
-    priority: 'urgent' | 'warning' | 'info';
-    assigned_dept: DeptCode;
-    assigned_to: string | null;
-    related_rooms: string[];
-    status: FollowupStatus;
-    due_at: string | null;
-    created_at: string;
-    updated_at: string;
-}
+type FollowupRecord = Followup & {
+    audit_logs: AuditLog[];
+    last_log: AuditLog | null;
+};
 
 const PRIORITY_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: typeof AlertTriangle }> = {
     urgent: { label: '緊急', color: 'text-red-700', bg: 'bg-red-100', border: 'border-l-red-500', icon: AlertTriangle },
@@ -42,30 +39,66 @@ const STATUS_CONFIG: Record<FollowupStatus, { label: string; color: string; bg: 
 type StatusFilter = 'all' | FollowupStatus;
 type PriorityFilter = 'all' | 'urgent' | 'warning' | 'info';
 
-function sortFollowups(items: Followup[]): Followup[] {
+const OPERATOR_STORAGE_KEY = 'tpsoho-operator-name';
+
+function sortFollowups(items: FollowupRecord[]): FollowupRecord[] {
     const priorityOrder: Record<string, number> = { urgent: 0, warning: 1, info: 2 };
     const statusOrder: Record<string, number> = { open: 0, in_progress: 1, done: 2, dismissed: 3 };
 
     return [...items].sort((a, b) => {
-        // Active before completed/dismissed
         const statusDiff = statusOrder[a.status] - statusOrder[b.status];
         if (statusDiff !== 0) return statusDiff;
-        // Urgent first
         const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
         if (priorityDiff !== 0) return priorityDiff;
-        // Newest first
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
 }
 
-export default function FollowupsPage() {
-    const [followups, setFollowups] = useState<Followup[]>([]);
+function AuditTrail({ logs }: { logs: AuditLog[] }) {
+    if (logs.length === 0) {
+        return <p className="text-xs text-slate-400">暫時未有操作記錄</p>;
+    }
+
+    return (
+        <div className="space-y-2">
+            {logs.slice(0, 3).map(log => (
+                <div key={log.id} className="text-xs text-slate-600 leading-relaxed">
+                    <p className="font-medium text-slate-700">
+                        {AUDIT_ACTION_LABELS[log.action]} · {log.actor}
+                        {log.from_status && log.to_status && log.from_status !== log.to_status && (
+                            <span className="text-slate-400"> · {STATUS_CONFIG[log.from_status as FollowupStatus]?.label || log.from_status} → {STATUS_CONFIG[log.to_status as FollowupStatus]?.label || log.to_status}</span>
+                        )}
+                    </p>
+                    <p className="mt-0.5 text-slate-500">原因：{log.reason}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">{formatDateTime(log.created_at)}</p>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function FollowupsPageContent() {
+    const searchParams = useSearchParams();
+    const [followups, setFollowups] = useState<FollowupRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
     const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
     const [updating, setUpdating] = useState<string | null>(null);
+    const [operatorName, setOperatorName] = useState('');
+    const [actionReasons, setActionReasons] = useState<Record<string, string>>({});
     const { showToast } = useToast();
+
+    useEffect(() => {
+        const saved = window.localStorage.getItem(OPERATOR_STORAGE_KEY);
+        if (saved) setOperatorName(saved);
+    }, []);
+
+    useEffect(() => {
+        if (operatorName.trim()) {
+            window.localStorage.setItem(OPERATOR_STORAGE_KEY, operatorName.trim());
+        }
+    }, [operatorName]);
 
     const fetchFollowups = useCallback(async () => {
         try {
@@ -87,21 +120,53 @@ export default function FollowupsPage() {
         return () => clearInterval(interval);
     }, [fetchFollowups]);
 
+    useEffect(() => {
+        const nextStatus = searchParams.get('status');
+        const nextPriority = searchParams.get('priority');
+
+        if (nextStatus === 'open' || nextStatus === 'in_progress' || nextStatus === 'done' || nextStatus === 'dismissed') {
+            setStatusFilter(nextStatus);
+        } else {
+            setStatusFilter('all');
+        }
+
+        if (nextPriority === 'urgent' || nextPriority === 'warning' || nextPriority === 'info') {
+            setPriorityFilter(nextPriority);
+        } else {
+            setPriorityFilter('all');
+        }
+    }, [searchParams]);
+
     const handleRefresh = () => {
         setRefreshing(true);
         fetchFollowups();
     };
 
     const updateStatus = async (id: string, newStatus: FollowupStatus) => {
+        const actor = operatorName.trim();
+        const reason = (actionReasons[id] || '').trim();
+
+        if (!actor) {
+            showToast('請先填寫操作人', 'error');
+            return;
+        }
+
+        if (!reason) {
+            showToast('請先填寫操作原因', 'error');
+            return;
+        }
+
         setUpdating(id);
         try {
             const res = await fetch('/api/followups', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id, status: newStatus }),
+                body: JSON.stringify({ id, status: newStatus, actor, reason }),
             });
-            if (!res.ok) throw new Error('更新失敗');
-            showToast(`已更新為「${STATUS_CONFIG[newStatus].label}」`, 'success');
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || '更新失敗');
+            showToast(`已更新為「${STATUS_CONFIG[newStatus].label}」並記錄`, 'success');
+            setActionReasons(prev => ({ ...prev, [id]: '' }));
             fetchFollowups();
         } catch (e: any) {
             showToast(e.message || '更新失敗', 'error');
@@ -110,10 +175,17 @@ export default function FollowupsPage() {
         }
     };
 
-    // Apply filters then sort
+    const focusRooms = (searchParams.get('rooms') || '')
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean);
+    const activeOnly = searchParams.get('active') === 'true';
+
     let filtered = followups;
     if (statusFilter !== 'all') filtered = filtered.filter(f => f.status === statusFilter);
     if (priorityFilter !== 'all') filtered = filtered.filter(f => f.priority === priorityFilter);
+    if (activeOnly) filtered = filtered.filter(f => f.status === 'open' || f.status === 'in_progress');
+    if (focusRooms.length > 0) filtered = filtered.filter(f => f.related_rooms.some(room => focusRooms.includes(room)));
     filtered = sortFollowups(filtered);
 
     const urgentCount = followups.filter(f => f.priority === 'urgent' && f.status !== 'done' && f.status !== 'dismissed').length;
@@ -132,11 +204,10 @@ export default function FollowupsPage() {
 
     return (
         <div className="space-y-6">
-            {/* Header */}
             <div className="flex items-start justify-between gap-4">
                 <div>
                     <h1 className="page-title">跟進事項</h1>
-                    <p className="text-sm text-slate-500 mt-1">集中管理由 AI 建議或手動建立的跟進任務</p>
+                    <p className="text-sm text-slate-500 mt-1">集中管理由 AI 建議或手動建立的跟進任務，所有狀態變更都會留底。</p>
                 </div>
                 <button
                     onClick={handleRefresh}
@@ -148,7 +219,17 @@ export default function FollowupsPage() {
                 </button>
             </div>
 
-            {/* Summary Cards */}
+            <div className="glass-card p-4 bg-blue-50/70 border border-blue-100">
+                <label className="text-sm font-semibold text-slate-700 block mb-2">操作人</label>
+                <input
+                    value={operatorName}
+                    onChange={event => setOperatorName(event.target.value)}
+                    placeholder="例如：Michael / Karen / Duty Phone"
+                    className="w-full lg:max-w-sm rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                />
+                <p className="text-xs text-slate-400 mt-2">開始處理、完成、略過、退回都會記錄這個操作人。</p>
+            </div>
+
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 {[
                     { label: '緊急待辦', value: urgentCount, color: 'text-red-700', bg: 'bg-red-50' },
@@ -163,8 +244,28 @@ export default function FollowupsPage() {
                 ))}
             </div>
 
-            {/* Filters */}
             <div className="space-y-2">
+                {(focusRooms.length > 0 || activeOnly) && (
+                    <div className="glass-card p-3 bg-blue-50/70 border border-blue-100 flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <p className="text-sm font-medium text-blue-800">已套用通知上下文</p>
+                            <p className="text-xs text-blue-600 mt-1">
+                                {focusRooms.length > 0
+                                    ? `相關房間：${focusRooms.join('、')}`
+                                    : '只顯示仍需處理的跟進事項'}
+                                {focusRooms.length > 0 && activeOnly ? ' · ' : ''}
+                                {activeOnly ? '已隱藏完成/略過項目' : ''}
+                            </p>
+                        </div>
+                        <Link
+                            href="/followups"
+                            className="text-xs font-medium text-blue-700 hover:text-blue-800 transition-colors"
+                        >
+                            清除篩選
+                        </Link>
+                    </div>
+                )}
+
                 <div className="flex gap-2 flex-wrap items-center">
                     {([
                         { key: 'all' as StatusFilter, label: '全部', count: followups.length },
@@ -211,7 +312,6 @@ export default function FollowupsPage() {
                 </div>
             </div>
 
-            {/* Cards */}
             {filtered.length === 0 ? (
                 <div className="glass-card p-12 text-center">
                     <ListChecks size={36} className="text-slate-300 mx-auto mb-3" />
@@ -223,20 +323,20 @@ export default function FollowupsPage() {
                     {filtered.map(followup => {
                         const priorityCfg = PRIORITY_CONFIG[followup.priority];
                         const statusCfg = STATUS_CONFIG[followup.status];
-                        const deptInfo = DEPT_INFO[followup.assigned_dept];
+                        const deptInfo = DEPT_INFO[followup.assigned_dept as DeptCode];
                         const isUpdating = updating === followup.id;
-                        const isDone = followup.status === 'done' || followup.status === 'dismissed';
+                        const reason = actionReasons[followup.id] || '';
+                        const canSubmit = operatorName.trim().length > 0 && reason.trim().length > 0;
 
                         return (
                             <div
                                 key={followup.id}
                                 className={cn(
-                                    'glass-card p-5 border-l-4 transition-opacity',
+                                    'glass-card p-5 border-l-4',
                                     priorityCfg.border,
-                                    isDone && 'opacity-50'
+                                    (followup.status === 'done' || followup.status === 'dismissed') && 'opacity-75'
                                 )}
                             >
-                                {/* Row 1: Title + badges */}
                                 <div className="flex items-start justify-between gap-3 mb-2">
                                     <h3 className="text-sm font-semibold text-slate-800 leading-snug flex-1 min-w-0">
                                         {followup.title}
@@ -251,12 +351,10 @@ export default function FollowupsPage() {
                                     </div>
                                 </div>
 
-                                {/* Row 2: Description */}
                                 <p className="text-[13px] text-slate-600 leading-relaxed whitespace-pre-line mb-3">
                                     {followup.description}
                                 </p>
 
-                                {/* Row 3: Metadata */}
                                 <div className="flex items-center gap-3 flex-wrap text-xs text-slate-500 mb-3">
                                     {deptInfo && (
                                         <span
@@ -290,7 +388,6 @@ export default function FollowupsPage() {
                                     </span>
                                 </div>
 
-                                {/* Rooms */}
                                 {followup.related_rooms.length > 0 && (
                                     <div className="flex items-center gap-1.5 flex-wrap mb-3">
                                         <Home size={12} className="text-slate-400 shrink-0" />
@@ -298,7 +395,12 @@ export default function FollowupsPage() {
                                             <Link
                                                 key={room}
                                                 href={`/rooms?highlight=${room}`}
-                                                className="text-[11px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-mono hover:bg-blue-100 hover:text-blue-700 transition-colors"
+                                                className={cn(
+                                                    'text-[11px] px-1.5 py-0.5 rounded font-mono transition-colors',
+                                                    focusRooms.includes(room)
+                                                        ? 'bg-blue-100 text-blue-700'
+                                                        : 'bg-slate-100 text-slate-600 hover:bg-blue-100 hover:text-blue-700'
+                                                )}
                                             >
                                                 {room}
                                             </Link>
@@ -306,64 +408,137 @@ export default function FollowupsPage() {
                                     </div>
                                 )}
 
-                                {/* Actions */}
-                                {!isDone && (
-                                    <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                                <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 space-y-3">
+                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-700">操作原因</p>
+                                            <p className="text-xs text-slate-400 mt-0.5">任何狀態變更都必須留下原因，方便日後追查及還原。</p>
+                                        </div>
+                                        {followup.last_log && (
+                                            <p className="text-xs text-slate-400">
+                                                最近：{followup.last_log.actor} · {formatDateTime(followup.last_log.created_at)}
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    <textarea
+                                        value={reason}
+                                        onChange={event => setActionReasons(prev => ({ ...prev, [followup.id]: event.target.value }))}
+                                        placeholder="例如：已聯絡工程部開始跟進；或：誤按完成，退回進行中"
+                                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 min-h-[88px] resize-y"
+                                    />
+
+                                    <div className="flex items-center gap-2 pt-1 border-t border-slate-100 flex-wrap">
                                         {followup.status === 'open' && (
+                                            <>
+                                                <button
+                                                    onClick={() => updateStatus(followup.id, 'in_progress')}
+                                                    disabled={isUpdating || !canSubmit}
+                                                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-amber-50 text-amber-700 hover:bg-amber-100 flex items-center gap-1.5 disabled:opacity-50"
+                                                >
+                                                    <Play size={13} />
+                                                    開始處理
+                                                </button>
+                                                <button
+                                                    onClick={() => updateStatus(followup.id, 'done')}
+                                                    disabled={isUpdating || !canSubmit}
+                                                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-emerald-50 text-emerald-700 hover:bg-emerald-100 flex items-center gap-1.5 disabled:opacity-50"
+                                                >
+                                                    <CheckCircle2 size={13} />
+                                                    直接完成
+                                                </button>
+                                                <button
+                                                    onClick={() => updateStatus(followup.id, 'dismissed')}
+                                                    disabled={isUpdating || !canSubmit}
+                                                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-slate-50 text-slate-500 hover:bg-slate-100 flex items-center gap-1.5 disabled:opacity-50"
+                                                >
+                                                    <XCircle size={13} />
+                                                    略過
+                                                </button>
+                                            </>
+                                        )}
+
+                                        {followup.status === 'in_progress' && (
+                                            <>
+                                                <button
+                                                    onClick={() => updateStatus(followup.id, 'open')}
+                                                    disabled={isUpdating || !canSubmit}
+                                                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-slate-100 text-slate-700 hover:bg-slate-200 flex items-center gap-1.5 disabled:opacity-50"
+                                                >
+                                                    <Undo2 size={13} />
+                                                    退回待處理
+                                                </button>
+                                                <button
+                                                    onClick={() => updateStatus(followup.id, 'done')}
+                                                    disabled={isUpdating || !canSubmit}
+                                                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-emerald-50 text-emerald-700 hover:bg-emerald-100 flex items-center gap-1.5 disabled:opacity-50"
+                                                >
+                                                    <CheckCircle2 size={13} />
+                                                    標記完成
+                                                </button>
+                                                <button
+                                                    onClick={() => updateStatus(followup.id, 'dismissed')}
+                                                    disabled={isUpdating || !canSubmit}
+                                                    className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-slate-50 text-slate-500 hover:bg-slate-100 flex items-center gap-1.5 disabled:opacity-50"
+                                                >
+                                                    <XCircle size={13} />
+                                                    略過
+                                                </button>
+                                            </>
+                                        )}
+
+                                        {followup.status === 'done' && (
                                             <button
                                                 onClick={() => updateStatus(followup.id, 'in_progress')}
-                                                disabled={isUpdating}
-                                                className={cn(
-                                                    'px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
-                                                    'bg-amber-50 text-amber-700 hover:bg-amber-100',
-                                                    'flex items-center gap-1.5 disabled:opacity-50'
-                                                )}
+                                                disabled={isUpdating || !canSubmit}
+                                                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-slate-100 text-slate-700 hover:bg-slate-200 flex items-center gap-1.5 disabled:opacity-50"
                                             >
-                                                <Play size={13} />
-                                                開始處理
+                                                <Undo2 size={13} />
+                                                退回進行中
                                             </button>
                                         )}
-                                        <button
-                                            onClick={() => updateStatus(followup.id, 'done')}
-                                            disabled={isUpdating}
-                                            className={cn(
-                                                'px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
-                                                'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
-                                                'flex items-center gap-1.5 disabled:opacity-50'
-                                            )}
-                                        >
-                                            <CheckCircle2 size={13} />
-                                            標記完成
-                                        </button>
-                                        <button
-                                            onClick={() => updateStatus(followup.id, 'dismissed')}
-                                            disabled={isUpdating}
-                                            className={cn(
-                                                'px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
-                                                'bg-slate-50 text-slate-500 hover:bg-slate-100',
-                                                'flex items-center gap-1.5 disabled:opacity-50'
-                                            )}
-                                        >
-                                            <XCircle size={13} />
-                                            略過
-                                        </button>
-                                    </div>
-                                )}
 
-                                {/* Completed/Dismissed state indicator */}
-                                {isDone && (
-                                    <div className="pt-2 border-t border-slate-100">
-                                        <span className={cn('text-xs font-medium flex items-center gap-1.5', statusCfg.color)}>
-                                            {followup.status === 'done' ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
-                                            {statusCfg.label}
-                                        </span>
+                                        {followup.status === 'dismissed' && (
+                                            <button
+                                                onClick={() => updateStatus(followup.id, 'open')}
+                                                disabled={isUpdating || !canSubmit}
+                                                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-slate-100 text-slate-700 hover:bg-slate-200 flex items-center gap-1.5 disabled:opacity-50"
+                                            >
+                                                <Undo2 size={13} />
+                                                重新開啟
+                                            </button>
+                                        )}
                                     </div>
-                                )}
+
+                                    {!canSubmit && (
+                                        <p className="text-xs text-amber-600">請先填寫操作人及原因，先可以變更狀態。</p>
+                                    )}
+                                </div>
+
+                                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 mt-3 space-y-2">
+                                    <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+                                        <History size={13} />
+                                        操作記錄
+                                    </div>
+                                    <AuditTrail logs={followup.audit_logs} />
+                                </div>
                             </div>
                         );
                     })}
                 </div>
             )}
         </div>
+    );
+}
+
+export default function FollowupsPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center h-[60vh]">
+                <div className="w-10 h-10 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+            </div>
+        }>
+            <FollowupsPageContent />
+        </Suspense>
     );
 }

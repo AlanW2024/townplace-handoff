@@ -20,7 +20,9 @@ export async function POST(request: Request) {
         raw_text: body.raw_text,
         sender_name: body.sender_name || 'Unknown',
         sender_dept: body.sender_dept,
-        wa_group: body.wa_group || '工程+禮賓',
+        wa_group: body.wa_group,
+        chat_name: body.chat_name || body.wa_group || 'SOHO 前線🏡🧹🦫🐿️',
+        chat_type: body.chat_type || 'group',
     });
 
     // The store is updated synchronously in-memory including handoffs and rooms.

@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AlertTriangle, Wrench, Sparkles, Key, Filter } from 'lucide-react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { Room, STATUS_LABELS } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -28,7 +30,15 @@ function getCleanColor(status: string) {
     }
 }
 
-function RoomCell({ room, onClick }: { room: Room | undefined; onClick: (r: Room) => void }) {
+function RoomCell({
+    room,
+    onClick,
+    isHighlighted,
+}: {
+    room: Room | undefined;
+    onClick: (r: Room) => void;
+    isHighlighted: boolean;
+}) {
     if (!room) return <div className="w-full aspect-square" />;
 
     return (
@@ -38,6 +48,7 @@ function RoomCell({ room, onClick }: { room: Room | undefined; onClick: (r: Room
                 'w-full aspect-square rounded-lg text-[10px] font-bold relative transition-all duration-200',
                 'flex flex-col items-center justify-center gap-0.5',
                 'hover:scale-110 hover:z-10 hover:shadow-lg',
+                isHighlighted && 'ring-2 ring-blue-500 ring-offset-1 scale-105 shadow-md',
                 room.needs_attention
                     ? 'bg-amber-50 border-2 border-amber-300 text-amber-800'
                     : room.lease_status === 'occupied'
@@ -131,12 +142,26 @@ function RoomDetail({ room, onClose }: { room: Room; onClose: () => void }) {
     );
 }
 
-export default function RoomsPage() {
+function RoomsPageContent() {
+    const searchParams = useSearchParams();
     const [rooms, setRooms] = useState<Room[]>([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<FilterMode>('all');
     const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const autoOpenedHighlightRef = useRef<string | null>(null);
+
+    const highlightedRooms = useMemo(() => {
+        const fromList = (searchParams.get('rooms') || '')
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean);
+        const highlight = searchParams.get('highlight');
+        return Array.from(new Set(highlight ? [...fromList, highlight] : fromList));
+    }, [searchParams]);
+
+    const highlightSet = useMemo(() => new Set(highlightedRooms), [highlightedRooms]);
+    const highlightedPrimaryRoom = searchParams.get('highlight') || highlightedRooms[0] || null;
 
     const fetchRooms = useCallback(async () => {
         try {
@@ -157,6 +182,17 @@ export default function RoomsPage() {
         const interval = setInterval(fetchRooms, 5000);
         return () => clearInterval(interval);
     }, [fetchRooms]);
+
+    useEffect(() => {
+        if (!highlightedPrimaryRoom) return;
+        if (autoOpenedHighlightRef.current === highlightedPrimaryRoom) return;
+
+        const room = rooms.find(item => item.id === highlightedPrimaryRoom);
+        if (!room) return;
+
+        setSelectedRoom(room);
+        autoOpenedHighlightRef.current = highlightedPrimaryRoom;
+    }, [highlightedPrimaryRoom, rooms]);
 
     const roomMap = new Map(rooms.map(r => [r.id, r]));
 
@@ -203,6 +239,23 @@ export default function RoomsPage() {
                 <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2">
                     <AlertTriangle size={16} className="text-red-500" />
                     <span className="text-sm text-red-700">{error}</span>
+                </div>
+            )}
+
+            {highlightedRooms.length > 0 && (
+                <div className="glass-card p-3 bg-blue-50/70 border border-blue-100 flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                        <p className="text-sm font-medium text-blue-800">已從通知定位相關房間</p>
+                        <p className="text-xs text-blue-600 mt-1">
+                            高亮 {highlightedRooms.length} 間單位：{highlightedRooms.join('、')}
+                        </p>
+                    </div>
+                    <Link
+                        href="/rooms"
+                        className="text-xs font-medium text-blue-700 hover:text-blue-800 transition-colors"
+                    >
+                        清除定位
+                    </Link>
                 </div>
             )}
 
@@ -277,7 +330,11 @@ export default function RoomsPage() {
                                     return (
                                         <td key={unit} className="p-0.5">
                                             {visible ? (
-                                                <RoomCell room={room} onClick={setSelectedRoom} />
+                                                <RoomCell
+                                                    room={room}
+                                                    onClick={setSelectedRoom}
+                                                    isHighlighted={highlightSet.has(id)}
+                                                />
                                             ) : (
                                                 <div className="w-full aspect-square rounded-lg bg-slate-50 opacity-20" />
                                             )}
@@ -294,5 +351,20 @@ export default function RoomsPage() {
                 <RoomDetail room={selectedRoom} onClose={() => setSelectedRoom(null)} />
             )}
         </div>
+    );
+}
+
+export default function RoomsPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center h-[60vh]">
+                <div className="flex flex-col items-center gap-3">
+                    <div className="w-10 h-10 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                    <span className="text-sm text-slate-400">載入中...</span>
+                </div>
+            </div>
+        }>
+            <RoomsPageContent />
+        </Suspense>
     );
 }
