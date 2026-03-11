@@ -64,6 +64,26 @@ upload 現在支援：
 
 重要業務規則已調整：
 
+#### 0. parser 已升級為 Hybrid AI
+
+目前 parsing layer 已經不是純規則：
+
+- 有 `ANTHROPIC_API_KEY` 時，會優先使用 Anthropic parser
+- 否則若有 `OPENAI_API_KEY`，會使用 OpenAI parser
+- 若沒有 key 或 API 失敗，會自動 fallback 回規則 parser
+
+message 現在會額外記錄：
+
+- `parsed_by`
+- `parsed_model`
+- `parsed_explanation`
+
+首頁訊息中心會顯示：
+
+- 由哪個 parser 判斷
+- 判斷原因 explanation
+- 信心度
+
 #### 1. `完成` 不等於 `handoff`
 
 現在只會在明確出現：
@@ -107,6 +127,7 @@ upload 現在支援：
 主要檔案：
 
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/lib/parser.ts`
+- `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/lib/ai/parse-message.ts`
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/lib/ingest.ts`
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/app/api/reviews/route.ts`
 
@@ -211,6 +232,7 @@ documents / followups 頁目前的 `操作人` 是前端欄位，不是真正 id
 ### 核心業務邏輯
 
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/lib/parser.ts`
+- `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/lib/ai/parse-message.ts`
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/lib/ingest.ts`
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/lib/notifications.ts`
 
@@ -223,6 +245,7 @@ documents / followups 頁目前的 `操作人` 是前端欄位，不是真正 id
 ### 風險較高的 API
 
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/app/api/upload/route.ts`
+- `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/app/api/parse/route.ts`
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/app/api/reviews/route.ts`
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/app/api/documents/route.ts`
 - `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/src/app/api/followups/route.ts`

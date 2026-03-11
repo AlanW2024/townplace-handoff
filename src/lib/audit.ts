@@ -1,4 +1,4 @@
-import { AuditAction, AuditEntityType, AuditLog } from './types';
+import { AuditAction, AuditEntityType, AuditFieldChange, AuditLog } from './types';
 
 interface CreateAuditLogInput {
     entity_type: AuditEntityType;
@@ -8,6 +8,8 @@ interface CreateAuditLogInput {
     reason: string;
     from_status?: string | null;
     to_status?: string | null;
+    changes?: AuditFieldChange[];
+    created_at?: string;
 }
 
 export function createAuditLog(input: CreateAuditLogInput): AuditLog {
@@ -20,7 +22,8 @@ export function createAuditLog(input: CreateAuditLogInput): AuditLog {
         reason: input.reason.trim(),
         from_status: input.from_status ?? null,
         to_status: input.to_status ?? null,
-        created_at: new Date().toISOString(),
+        created_at: input.created_at ?? new Date().toISOString(),
+        changes: input.changes ?? [],
     };
 }
 

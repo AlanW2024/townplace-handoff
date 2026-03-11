@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, AuditLog, DeptCode, ChatType } from './types';
+import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, AuditLog, DeptCode, ChatType, ParseEngine } from './types';
+import { createAuditLog } from './audit';
 import { parseWhatsAppMessage } from './parser';
 
 export interface StoreData {
@@ -15,6 +16,66 @@ export interface StoreData {
 }
 
 const STORE_PATH = path.join(process.cwd(), '.demo-store.json');
+const TMP_STORE_PATH = `${STORE_PATH}.tmp`;
+const LOCK_PATH = `${STORE_PATH}.lock`;
+const STORE_LOCK_STALE_MS = 30_000;
+const STORE_LOCK_TIMEOUT_MS = 5_000;
+const STORE_LOCK_POLL_MS = 25;
+let writeQueue: Promise<void> = Promise.resolve();
+let seedStoreCache: StoreData | null = null;
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function removeLockDir(): void {
+    if (fs.existsSync(LOCK_PATH)) {
+        fs.rmSync(LOCK_PATH, { recursive: true, force: true });
+    }
+}
+
+async function acquireStoreLock(): Promise<() => void> {
+    const startedAt = Date.now();
+
+    while (true) {
+        try {
+            fs.mkdirSync(LOCK_PATH);
+            fs.writeFileSync(
+                path.join(LOCK_PATH, 'owner.json'),
+                JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }),
+                'utf8'
+            );
+
+            let released = false;
+            return () => {
+                if (released) return;
+                released = true;
+                try {
+                    removeLockDir();
+                } catch {}
+            };
+        } catch (error) {
+            const nodeError = error as NodeJS.ErrnoException;
+            if (nodeError.code !== 'EEXIST') {
+                throw error;
+            }
+
+            try {
+                const stats = fs.statSync(LOCK_PATH);
+                if (Date.now() - stats.mtimeMs > STORE_LOCK_STALE_MS) {
+                    removeLockDir();
+                    continue;
+                }
+            } catch {}
+
+            if (Date.now() - startedAt > STORE_LOCK_TIMEOUT_MS) {
+                throw new Error('Timed out waiting for store lock');
+            }
+
+            await sleep(STORE_LOCK_POLL_MS);
+        }
+    }
+}
 
 function roomNeedsAttention(room: Pick<Room, 'eng_status' | 'clean_status' | 'lease_status' | 'needs_attention'>): boolean {
     return Boolean(
@@ -107,7 +168,7 @@ function generateRooms(): Room[] {
     }));
 }
 
-function generateSeedMessages(): Omit<Message, 'parsed_room' | 'parsed_action' | 'parsed_type' | 'confidence'>[] {
+function generateSeedMessages(): Omit<Message, 'parsed_room' | 'parsed_action' | 'parsed_type' | 'confidence' | 'parsed_explanation' | 'parsed_by' | 'parsed_model'>[] {
     const today = new Date();
     const baseTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 8, 0, 0);
 
@@ -174,9 +235,42 @@ function generateSeedBookings(): Booking[] {
     ];
 }
 
+function generateSeedAuditLogs(documents: Document[], followups: Followup[]): AuditLog[] {
+    const documentLogs = documents.map(document =>
+        createAuditLog({
+            entity_type: 'document',
+            entity_id: document.id,
+            action: 'created',
+            actor: 'Seed Data',
+            reason: '初始化示範文件資料',
+            from_status: null,
+            to_status: document.status,
+            created_at: document.updated_at,
+        })
+    );
+
+    const followupLogs = followups.map(followup =>
+        createAuditLog({
+            entity_type: 'followup',
+            entity_id: followup.id,
+            action: 'created',
+            actor: 'Seed Data',
+            reason: '初始化示範跟進事項',
+            from_status: null,
+            to_status: followup.status,
+            created_at: followup.created_at,
+        })
+    );
+
+    return [...documentLogs, ...followupLogs];
+}
+
 function buildSeedStore(): StoreData {
     const rooms = generateRooms();
     const rawMessages = generateSeedMessages();
+    const documents = generateSeedDocuments();
+    const bookings = generateSeedBookings();
+    const followups: Followup[] = [];
     const messages = rawMessages.map(message => {
         const parsed = parseWhatsAppMessage(message.raw_text, message.sender_name, message.sender_dept);
         return {
@@ -185,6 +279,11 @@ function buildSeedStore(): StoreData {
             parsed_action: parsed.action,
             parsed_type: parsed.type,
             confidence: parsed.confidence,
+            parsed_explanation: parsed.action
+                ? '由規則引擎根據房號、關鍵字與發送者部門推斷。'
+                : '規則引擎未能穩定判斷，需人工覆核。',
+            parsed_by: 'rules' as ParseEngine,
+            parsed_model: 'rule-engine',
         };
     });
 
@@ -214,16 +313,23 @@ function buildSeedStore(): StoreData {
         rooms,
         messages,
         handoffs,
-        documents: generateSeedDocuments(),
-        bookings: generateSeedBookings(),
-        followups: [],
+        documents,
+        bookings,
+        followups,
         parse_reviews: [],
-        audit_logs: [],
+        audit_logs: generateSeedAuditLogs(documents, followups),
     };
 }
 
+function getSeedStore(): StoreData {
+    if (!seedStoreCache) {
+        seedStoreCache = buildSeedStore();
+    }
+    return JSON.parse(JSON.stringify(seedStoreCache)) as StoreData;
+}
+
 function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
-    const seedStore = buildSeedStore();
+    const seedStore = getSeedStore();
     const store = rawStore ?? seedStore;
 
     return {
@@ -239,6 +345,13 @@ function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
                 wa_group: message.wa_group ?? chatMeta.chat_name,
                 chat_name: message.chat_name ?? message.wa_group ?? chatMeta.chat_name,
                 chat_type: message.chat_type ?? chatMeta.chat_type,
+                parsed_explanation: message.parsed_explanation ?? (
+                    message.parsed_action
+                        ? '由規則引擎根據房號、關鍵字與發送者部門推斷。'
+                        : '規則引擎未能穩定判斷，需人工覆核。'
+                ),
+                parsed_by: (message.parsed_by ?? 'rules') as ParseEngine,
+                parsed_model: message.parsed_model ?? (message.parsed_by === 'review' ? 'human-review' : 'rule-engine'),
             };
         }),
         handoffs: store.handoffs ?? seedStore.handoffs,
@@ -251,35 +364,55 @@ function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
 }
 
 function readStoreFile(): Partial<StoreData> | null {
-    try {
-        if (!fs.existsSync(STORE_PATH)) {
-            return null;
-        }
-
-        const text = fs.readFileSync(STORE_PATH, 'utf8');
-        return JSON.parse(text) as Partial<StoreData>;
-    } catch {
+    if (!fs.existsSync(STORE_PATH)) {
         return null;
+    }
+
+    const text = fs.readFileSync(STORE_PATH, 'utf8');
+    try {
+        return JSON.parse(text) as Partial<StoreData>;
+    } catch (error) {
+        throw new Error(`Store file is corrupted: ${(error as Error).message}`);
     }
 }
 
 export function saveStore(store: StoreData): void {
-    fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf8');
+    try {
+        fs.writeFileSync(TMP_STORE_PATH, JSON.stringify(store, null, 2), 'utf8');
+        fs.renameSync(TMP_STORE_PATH, STORE_PATH);
+    } catch (error) {
+        try {
+            if (fs.existsSync(TMP_STORE_PATH)) {
+                fs.rmSync(TMP_STORE_PATH, { force: true });
+            }
+        } catch {}
+        throw new Error(`Failed to write store: ${(error as Error).message}`);
+    }
 }
 
 export function getStore(): StoreData {
-    const rawStore = readStoreFile();
-    const normalized = normalizeStore(rawStore);
+    return normalizeStore(readStoreFile());
+}
 
-    if (!rawStore || JSON.stringify(rawStore) !== JSON.stringify(normalized)) {
-        saveStore(normalized);
-    }
+export async function withStoreWrite<T>(mutator: (store: StoreData) => Promise<T> | T): Promise<T> {
+    const run = writeQueue.then(async () => {
+        const releaseLock = await acquireStoreLock();
+        try {
+            const store = getStore();
+            const result = await mutator(store);
+            saveStore(store);
+            return result;
+        } finally {
+            releaseLock();
+        }
+    });
 
-    return normalized;
+    writeQueue = run.then(() => undefined, () => undefined);
+    return run;
 }
 
 export function resetStore(): StoreData {
-    const store = buildSeedStore();
+    const store = getSeedStore();
     saveStore(store);
     return store;
 }

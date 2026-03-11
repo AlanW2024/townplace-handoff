@@ -4,7 +4,7 @@
 // ===========================
 
 import { getStore } from './store';
-import { DeptCode, DEPT_INFO } from './types';
+import { DeptCode, DEPT_INFO, Document } from './types';
 
 export type NotificationType =
     | 'handoff_timeout'
@@ -42,6 +42,9 @@ const TYPE_LABELS: Record<NotificationType, string> = {
 
 export { TYPE_LABELS };
 
+const BOOKING_CONFLICT_LOOKAHEAD_MS = 48 * 60 * 60 * 1000;
+const BOOKING_CONFLICT_GRACE_MS = 12 * 60 * 60 * 1000;
+
 function deptName(dept: DeptCode | null): string {
     if (!dept) return '相關部門';
     return DEPT_INFO[dept]?.name || dept;
@@ -67,10 +70,31 @@ function formatRoomList(rooms: string[], limit = 5): string {
     return rooms.length > limit ? `${preview} 等 ${rooms.length} 間單位` : preview;
 }
 
-function latestDate(values: string[]): string {
+function latestDate(values: string[], fallback = new Date().toISOString()): string {
+    if (values.length === 0) return fallback;
     return values.reduce((latest, current) =>
         new Date(current).getTime() > new Date(latest).getTime() ? current : latest
     );
+}
+
+function inferDocumentDept(document: Document): DeptCode | null {
+    const holder = (document.current_holder || '').toLowerCase();
+
+    if (/leasing|租務|lease/.test(holder)) return 'lease';
+    if (/concierge|禮賓|front\s*desk/.test(holder)) return 'conc';
+    if (/management|mgmt|經理|管理/.test(holder)) return 'mgmt';
+
+    switch (document.doc_type) {
+        case 'Newlet':
+        case 'TA':
+            return 'lease';
+        case 'Surrender':
+        case 'Inventory':
+        case 'DRF':
+            return 'conc';
+        default:
+            return null;
+    }
 }
 
 export function generateNotifications(): Notification[] {
@@ -113,32 +137,43 @@ export function generateNotifications(): Notification[] {
     const activeDocuments = store.documents.filter(doc => doc.status !== 'completed');
     const criticalDocs = activeDocuments.filter(doc => doc.days_outstanding > 5);
     const warningDocs = activeDocuments.filter(doc => doc.days_outstanding > 3 && doc.days_outstanding <= 5);
+    const pushDocumentNotifications = (documents: Document[], level: NotificationLevel) => {
+        const grouped = new Map<string, Document[]>();
+
+        for (const document of documents) {
+            const dept = inferDocumentDept(document);
+            const key = dept || 'unknown';
+            const group = grouped.get(key) || [];
+            group.push(document);
+            grouped.set(key, group);
+        }
+
+        for (const [key, docs] of Array.from(grouped.entries())) {
+            const dept = key === 'unknown' ? null : key as DeptCode;
+            const rooms = uniqueRooms(docs.map(doc => doc.room_id));
+            const maxDays = Math.max(...docs.map(doc => doc.days_outstanding));
+            notifications.push({
+                id: makeId(),
+                type: 'doc_overdue',
+                level,
+                title: level === 'critical'
+                    ? `${docs.length} 份文件嚴重超期`
+                    : `${docs.length} 份文件處理偏慢`,
+                body: level === 'critical'
+                    ? `涉及 ${formatRoomList(rooms)}，最長已超過 ${maxDays} 天。建議優先由${deptName(dept)}跟進。`
+                    : `涉及 ${formatRoomList(rooms)}。文件已超過 3 天未完成，建議由${deptName(dept)}盡快確認持有人與進度。`,
+                related_rooms: rooms,
+                related_dept: dept,
+                created_at: latestDate(docs.map(doc => doc.updated_at)),
+            });
+        }
+    };
+
     if (criticalDocs.length > 0) {
-        const rooms = uniqueRooms(criticalDocs.map(doc => doc.room_id));
-        const maxDays = Math.max(...criticalDocs.map(doc => doc.days_outstanding));
-        notifications.push({
-            id: makeId(),
-            type: 'doc_overdue',
-            level: 'critical',
-            title: `${criticalDocs.length} 份文件嚴重超期`,
-            body: `涉及 ${formatRoomList(rooms)}，最長已超過 ${maxDays} 天。建議優先由租務或禮賓跟進。`,
-            related_rooms: rooms,
-            related_dept: 'lease',
-            created_at: latestDate(criticalDocs.map(doc => doc.updated_at)),
-        });
+        pushDocumentNotifications(criticalDocs, 'critical');
     }
     if (warningDocs.length > 0) {
-        const rooms = uniqueRooms(warningDocs.map(doc => doc.room_id));
-        notifications.push({
-            id: makeId(),
-            type: 'doc_overdue',
-            level: 'warning',
-            title: `${warningDocs.length} 份文件處理偏慢`,
-            body: `涉及 ${formatRoomList(rooms)}。文件已超過 3 天未完成，建議盡快確認持有人與進度。`,
-            related_rooms: rooms,
-            related_dept: 'lease',
-            created_at: latestDate(warningDocs.map(doc => doc.updated_at)),
-        });
+        pushDocumentNotifications(warningDocs, 'warning');
     }
 
     // Rule 3: Booking conflict — aggregate all room readiness conflicts
@@ -150,6 +185,11 @@ export function generateNotifications(): Notification[] {
     }> = [];
     for (const booking of store.bookings) {
         if (!booking.room_id) continue;
+        const scheduledAt = new Date(booking.scheduled_at).getTime();
+        if (Number.isNaN(scheduledAt)) continue;
+        if (scheduledAt - now > BOOKING_CONFLICT_LOOKAHEAD_MS) continue;
+        if (now - scheduledAt > BOOKING_CONFLICT_GRACE_MS) continue;
+
         const room = store.rooms.find(r => r.id === booking.room_id);
         if (!room) continue;
 
@@ -202,6 +242,7 @@ export function generateNotifications(): Notification[] {
     const urgentFollowups = store.followups.filter(
         followup => followup.priority === 'urgent' && (followup.status === 'open' || followup.status === 'in_progress')
     );
+    const urgentFollowupIds = new Set(urgentFollowups.map(followup => followup.id));
     const urgentFollowupGroups = new Map<DeptCode, typeof urgentFollowups>();
     for (const followup of urgentFollowups) {
         const group = urgentFollowupGroups.get(followup.assigned_dept) || [];
@@ -224,7 +265,10 @@ export function generateNotifications(): Notification[] {
 
     // Rule 5b: Followup due_at approaching — aggregate by state and department
     const activeFollowups = store.followups.filter(
-        followup => followup.due_at && (followup.status === 'open' || followup.status === 'in_progress')
+        followup =>
+            followup.due_at &&
+            (followup.status === 'open' || followup.status === 'in_progress') &&
+            !urgentFollowupIds.has(followup.id)
     );
     const dueGroups = new Map<string, typeof activeFollowups>();
     for (const followup of activeFollowups) {

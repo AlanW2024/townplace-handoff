@@ -6137,7 +6137,10 @@
       "parsed_type": "handoff",
       "confidence": 0.99,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-002",
@@ -6154,7 +6157,10 @@
       "parsed_type": "handoff",
       "confidence": 0.99,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-003",
@@ -6174,7 +6180,10 @@
       "parsed_type": "handoff",
       "confidence": 0.99,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-004",
@@ -6191,7 +6200,10 @@
       "parsed_type": "update",
       "confidence": 0.99,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-005",
@@ -6208,7 +6220,10 @@
       "parsed_type": "update",
       "confidence": 0.95,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-006",
@@ -6225,7 +6240,10 @@
       "parsed_type": "request",
       "confidence": 0.99,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-007",
@@ -6242,7 +6260,10 @@
       "parsed_type": "query",
       "confidence": 0.95,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-008",
@@ -6259,7 +6280,10 @@
       "parsed_type": "handoff",
       "confidence": 0.99,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-009",
@@ -6276,7 +6300,10 @@
       "parsed_type": "query",
       "confidence": 0.95,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-010",
@@ -6293,7 +6320,10 @@
       "parsed_type": "update",
       "confidence": 0.95,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-011",
@@ -6308,7 +6338,10 @@
       "parsed_type": "trigger",
       "confidence": 0.65,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-012",
@@ -6325,7 +6358,10 @@
       "parsed_type": "trigger",
       "confidence": 0.95,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-013",
@@ -6344,7 +6380,10 @@
       "parsed_type": "trigger",
       "confidence": 0.95,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-014",
@@ -6359,7 +6398,10 @@
       "parsed_type": "update",
       "confidence": 0.6,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-015",
@@ -6374,7 +6416,10 @@
       "parsed_type": null,
       "confidence": 0.1,
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "規則引擎未能穩定判斷，需人工覆核。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-1773082911189-1",
@@ -6389,7 +6434,10 @@
       "confidence": 0.65,
       "created_at": "2026-03-09T19:01:51.189Z",
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-1773082922806-2",
@@ -6408,7 +6456,10 @@
       "confidence": 0.95,
       "created_at": "2026-03-09T19:02:02.806Z",
       "chat_name": "工程+禮賓",
-      "chat_type": "group"
+      "chat_type": "group",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-1773127271566-1",
@@ -6423,7 +6474,10 @@
       "parsed_action": null,
       "parsed_type": null,
       "confidence": 0.1,
-      "created_at": "2026-03-10T07:21:11.566Z"
+      "created_at": "2026-03-10T07:21:11.566Z",
+      "parsed_explanation": "規則引擎未能穩定判斷，需人工覆核。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     },
     {
       "id": "msg-1773127284525-2",
@@ -6440,7 +6494,10 @@
       "parsed_action": "已確認",
       "parsed_type": "update",
       "confidence": 0.95,
-      "created_at": "2026-03-10T07:21:24.525Z"
+      "created_at": "2026-03-10T07:21:24.525Z",
+      "parsed_explanation": "由規則引擎根據房號、關鍵字與發送者部門推斷。",
+      "parsed_by": "rules",
+      "parsed_model": "rule-engine"
     }
   ],
   "handoffs": [

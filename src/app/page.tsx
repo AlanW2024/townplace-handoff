@@ -37,6 +37,13 @@ function SourceBadge({ type, name }: { type: ChatType; name: string }) {
 function ParseCard({ message }: { message: Message }) {
     const deptInfo = DEPT_INFO[message.sender_dept] || DEPT_INFO.conc;
     const needsReview = message.confidence < 0.75 || !message.parsed_action;
+    const parserLabel = message.parsed_by === 'anthropic'
+        ? 'Claude AI'
+        : message.parsed_by === 'openai'
+            ? 'OpenAI'
+            : message.parsed_by === 'review'
+                ? '人工覆核'
+                : '規則引擎';
 
     return (
         <div className="glass-card p-4 animate-fade-in">
@@ -68,6 +75,19 @@ function ParseCard({ message }: { message: Message }) {
                                     needsReview ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
                                 )}>
                                     {needsReview ? '待覆核' : 'AI 已解析'}
+                                </span>
+                                <span className={cn(
+                                    'status-badge',
+                                    message.parsed_by === 'anthropic'
+                                        ? 'bg-violet-100 text-violet-700'
+                                        : message.parsed_by === 'openai'
+                                            ? 'bg-sky-100 text-sky-700'
+                                            : message.parsed_by === 'review'
+                                                ? 'bg-rose-100 text-rose-700'
+                                                : 'bg-slate-100 text-slate-600'
+                                )}>
+                                    <Brain size={11} className="inline mr-1" />
+                                    {parserLabel}
                                 </span>
                                 {message.parsed_type && (
                                     <span className={cn(
@@ -110,6 +130,18 @@ function ParseCard({ message }: { message: Message }) {
                                     {message.parsed_action || '未能穩定判斷，需要人工覆核'}
                                 </p>
                             </div>
+                        </div>
+
+                        <div className="mt-3 rounded-lg bg-white/80 border border-slate-200 px-3 py-2.5">
+                            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">判斷原因</p>
+                            <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                                {message.parsed_explanation || '未提供額外解釋。'}
+                            </p>
+                            {message.parsed_model && (
+                                <p className="mt-1 text-[11px] text-slate-400">
+                                    模型 / 引擎：{message.parsed_model}
+                                </p>
+                            )}
                         </div>
 
                         <div className="mt-3 flex items-center gap-1.5">

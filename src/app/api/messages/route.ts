@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     const { ingestMessage } = await import('@/lib/ingest');
 
     // Pass everything to the central ingestion function
-    const result = ingestMessage({
+    const result = await ingestMessage({
         raw_text: body.raw_text,
         sender_name: body.sender_name || 'Unknown',
         sender_dept: body.sender_dept,
@@ -25,6 +25,5 @@ export async function POST(request: Request) {
         chat_type: body.chat_type || 'group',
     });
 
-    // The store is updated synchronously in-memory including handoffs and rooms.
     return NextResponse.json(result.message, { status: 201 });
 }

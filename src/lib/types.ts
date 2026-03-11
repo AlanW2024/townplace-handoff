@@ -15,8 +15,15 @@ export type DocStatus = 'not_started' | 'preparing' | 'pending_sign' | 'with_ten
 export type BookingType = 'viewing' | 'shooting' | 'event' | 'tenant_booking';
 export type FollowupStatus = 'open' | 'in_progress' | 'done' | 'dismissed';
 export type FollowupSourceType = 'suggestion' | 'manual';
+export type ParseEngine = 'rules' | 'anthropic' | 'openai' | 'review';
 export type AuditEntityType = 'document' | 'followup';
 export type AuditAction = 'created' | 'status_advanced' | 'status_reverted' | 'status_changed' | 'field_updated';
+
+export interface AuditFieldChange {
+    field: string;
+    from: string | null;
+    to: string | null;
+}
 
 export interface Room {
     id: string;
@@ -49,6 +56,9 @@ export interface Message {
     parsed_action: string | null;
     parsed_type: HandoffType | null;
     confidence: number;
+    parsed_explanation: string | null;
+    parsed_by: ParseEngine;
+    parsed_model: string | null;
     created_at: string;
 }
 
@@ -114,6 +124,7 @@ export interface AuditLog {
     from_status: string | null;
     to_status: string | null;
     created_at: string;
+    changes?: AuditFieldChange[];
 }
 
 export type ReviewStatus = 'pending' | 'approved' | 'corrected' | 'dismissed';
@@ -149,6 +160,9 @@ export interface ParseResult {
     from_dept: DeptCode | null;
     to_dept: DeptCode | null;
     confidence: number;
+    explanation?: string | null;
+    engine?: ParseEngine;
+    model?: string | null;
 }
 
 // Department display info

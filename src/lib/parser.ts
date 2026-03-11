@@ -1,4 +1,5 @@
 import { DeptCode, HandoffType, ParseResult } from './types';
+import { analyzeHandoffSignal, extractRooms } from './message-parsing';
 
 // ===========================
 // Staff → Department mapping
@@ -20,16 +21,14 @@ const STAFF_DEPT_MAP: Record<string, DeptCode> = {
     'eric': 'security',
 };
 
-// ===========================
-// Room number regex
-// ===========================
-const ROOM_REGEX = /\b(\d{1,2}[A-Ma-m])\b/g;
-
-const HANDOFF_READY_REGEX = /(可清(?:潔)?|ready\s*for\s*clean(?:ing)?|不影響可清(?:潔)?)/i;
 const COMPLETION_REGEX = /(已?完成|done|完成咗)/i;
 const PROGRESS_WORK_REGEX = /(已調整|調整完成|已處理|處理完成|已安裝|安裝完成|已更換|更換完成|已修復|修復完成|回復正常|已吱膠|已打膠|logged)/i;
 const WORK_SCOPE_REGEX = /(油漆|門鉸|止回閥|掃口|熱水爐|安全掣|門柄|門手柄|牆身|天花|窗台|燈糟|大門|喉|閥|玻璃|床尾|膠|油|冷氣|爐|安裝|更換|調整|修補|修復|fix|logged)/i;
 const CONTINUATION_REGEX = /(明天|聽日|下週|下星期|再跟進|仲有|尚有|未完|未完成|差少少|等料|等待|繼續|需時|本週|下次|tomorrow|next week)/i;
+
+const STAFF_DEPT_ENTRIES = Object.entries(STAFF_DEPT_MAP).sort(
+    ([aliasA], [aliasB]) => aliasB.length - aliasA.length
+);
 
 // ===========================
 // Action keyword patterns
@@ -166,26 +165,12 @@ export function parseWhatsAppMessage(
     const normalizedText = rawText.replace(/\s+/g, ' ').trim();
 
     // 1. Extract room numbers
-    const rooms: string[] = [];
-    const roomMatches = Array.from(rawText.matchAll(ROOM_REGEX));
-    for (const match of roomMatches) {
-        const room = match[1].toUpperCase();
-        const floor = parseInt(room.slice(0, -1));
-        if (floor >= 1 && floor <= 32) {
-            if (!rooms.includes(room)) rooms.push(room);
-        }
-    }
+    const rooms = extractRooms(rawText);
 
     // 2. Determine sender department
     let fromDept: DeptCode | null = senderDept || null;
     if (!fromDept && senderName) {
-        const normalizedName = senderName.toLowerCase().trim();
-        for (const [name, dept] of Object.entries(STAFF_DEPT_MAP)) {
-            if (normalizedName === name.toLowerCase() || normalizedName.includes(name.toLowerCase())) {
-                fromDept = dept;
-                break;
-            }
-        }
+        fromDept = getDeptFromSender(senderName);
     }
 
     const hasQueryWords = /幾耐|幾時|邊個時間|哪個時間|時間方便|方便|\?|？/.test(normalizedText);
@@ -202,12 +187,24 @@ export function parseWhatsAppMessage(
         };
     }
 
+    const handoffSignal = analyzeHandoffSignal(normalizedText);
     const isEngineeringContext = fromDept === 'eng' || /工程部|師傅/.test(normalizedText);
-    const hasExplicitHandoff = HANDOFF_READY_REGEX.test(normalizedText);
+    const hasExplicitHandoff = handoffSignal.allowsImmediateHandoff;
     const hasCompletionWords = COMPLETION_REGEX.test(normalizedText);
     const hasProgressWorkWords = PROGRESS_WORK_REGEX.test(normalizedText);
     const hasScopeDetails = WORK_SCOPE_REGEX.test(normalizedText) || /[(（].+[)）]/.test(normalizedText);
     const hasContinuationWords = CONTINUATION_REGEX.test(normalizedText);
+
+    if (rooms.length > 0 && handoffSignal.hasExplicitPositiveHandoff && !handoffSignal.allowsImmediateHandoff) {
+        return {
+            rooms,
+            action: '工程進度更新',
+            type: 'update',
+            from_dept: fromDept || (isEngineeringContext ? 'eng' : null),
+            to_dept: null,
+            confidence: handoffSignal.hasFutureContext ? 0.55 : 0.82,
+        };
+    }
 
     // Engineering updates often mention completed work for the day, but that does not
     // mean the whole room is ready for cleaning. Only explicit "可清/可清潔" is handoff.
@@ -238,6 +235,10 @@ export function parseWhatsAppMessage(
     let bestConfidence = 0;
 
     for (const pattern of ACTION_PATTERNS) {
+        if (pattern.type === 'handoff' && !handoffSignal.allowsImmediateHandoff) {
+            continue;
+        }
+
         for (const keyword of pattern.keywords) {
             if (keyword.test(normalizedText)) {
                 const confidence = rooms.length > 0 ? 0.9 : 0.6;
@@ -301,8 +302,13 @@ export function parseWhatsAppMessage(
 // ===========================
 export function getDeptFromSender(senderName: string): DeptCode | null {
     const normalizedName = senderName.toLowerCase().trim();
-    for (const [name, dept] of Object.entries(STAFF_DEPT_MAP)) {
-        if (normalizedName === name.toLowerCase() || normalizedName.includes(name.toLowerCase())) {
+    for (const [name, dept] of STAFF_DEPT_ENTRIES) {
+        if (normalizedName === name.toLowerCase()) {
+            return dept;
+        }
+    }
+    for (const [name, dept] of STAFF_DEPT_ENTRIES) {
+        if (normalizedName.includes(name.toLowerCase())) {
             return dept;
         }
     }

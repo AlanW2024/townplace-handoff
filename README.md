@@ -1,130 +1,383 @@
 # TOWNPLACE SOHO — Cross-Department Handoff Bridge System
 
-這是一個為 TOWNPLACE SOHO（服務式住宅）設計的**跨部門交接與通訊整合系統**原型 (Prototype)。
+這是一個為 TOWNPLACE SOHO 設計的 **跨部門交接橋樑系統 prototype**。  
+它不是要取代 WhatsApp，而是夾在 WhatsApp 與營運流程中間，負責把原始對話轉成：
 
-## 專案背景與痛點
+- 可追蹤的房間狀態
+- 跨部門 handoff signal
+- 待人工覆核訊息
+- 管理層通知與跟進事項
 
-目前物業管理的 6 個不同部門（禮賓部、工程部、房務部、清潔部、租務部、管理層等）主要透過 WhatsApp 群組進行繁雜的日常溝通。
-關鍵的狀態變更（例如：「10F工程已完成 → 可以開始清潔」）很容易在每天上百則的訊息中被淹沒，導致各部門間的「交接時刻 (Handoff moments)」缺乏有效的系統追蹤。
+---
 
-## 解決方案
+## 目前產品定位
 
-本系統作為現有 WhatsApp 群組與物業管理系統之間的「橋樑 (Bridge)」。
-核心特色：**工作流程零改變**。前線員工依然在熟悉的 WhatsApp 中溝通，而本系統會自動即時解析這些對話，提取出結構化的房號、動作與交接信號，並統一呈現在一個清晰的即時儀表板上。
+這個系統現在最適合這樣使用：
 
-## 系統工作流程 (System Workflow)
+- **左邊：真 WhatsApp Web**
+  - 給 manager 即時 fact check 原文
+- **中間：訊息中心 / AI reasoning**
+  - 顯示系統如何理解 WhatsApp 訊息
+- **右邊：交接信號**
+  - 顯示真正要處理的跨部門 handoff
+
+換句話說，產品的核心不是「聊天工具」，而是：
+
+**Truth -> Reasoning -> Action**
+
+---
+
+## 這個系統解決什麼問題
+
+目前物業管理日常主要透過 WhatsApp 群組與直聊溝通。  
+問題不是「沒有訊息」，而是：
+
+- 訊息很多
+- 房號與動作埋在文字裡
+- 真正的交接時刻很易被沖走
+- 管理層很難即時知道哪個房間卡住
+- 同事按了文件 / 跟進狀態後，未必知道誰按、為什麼按、能否退回
+
+這個系統的價值在於：
+
+1. 保留原始 WhatsApp 作證據
+2. 用 AI / parser 把訊息結構化
+3. 把營運重點變成 signal / review / notification / follow-up
+4. 補上 auditability
+
+---
+
+## 現況架構圖
 
 ```mermaid
-flowchart TD
-    WA["📱 WhatsApp 群組訊息"] -->|匯出 .txt 或手動輸入| UPLOAD["上傳 / 輸入訊息"]
-    UPLOAD --> PARSER["🔍 Parser 解析引擎<br/>房號 · 動作 · 部門 · 信心度"]
+flowchart LR
+    WA["左邊：真 WhatsApp Web<br/>原始對話 / fact check"] --> INGEST["訊息輸入層<br/>manual message / upload txt / upload zip"]
+    INGEST --> PRE["前處理<br/>sender mapping / room regex / chat metadata"]
+    PRE --> AI["AI Parser Layer<br/>Anthropic / OpenAI（有 key 時）"]
+    PRE --> RULE["Rule Parser Fallback<br/>無 key 或 AI 失敗時使用"]
 
-    PARSER --> CHECK{信心度 ≥ 75%<br/>且非 Summary？}
+    AI --> DECIDE["結構化判斷<br/>rooms / action / type / confidence / explanation"]
+    RULE --> DECIDE
 
-    CHECK -->|✅ 高信心度| AUTO["⚡ 自動套用"]
-    AUTO --> ROOM["🏠 房間狀態更新"]
-    AUTO --> HANDOFF["🔄 交接信號建立"]
+    DECIDE --> GATE{"高信心 + 非 summary？"}
+    GATE -->|是| APPLY["自動套用"]
+    GATE -->|否| REVIEW["人工覆核 Queue"]
 
-    CHECK -->|❌ 低信心度 / Summary| REVIEW["👁️ 人工覆核 Queue"]
-    REVIEW -->|批准 / 修正| AUTO
-    REVIEW -->|略過| SKIP["不套用"]
+    APPLY --> ROOM["房間狀態更新"]
+    APPLY --> HANDOFF["交接信號"]
+    APPLY --> MSG["訊息中心<br/>顯示 AI 如何判斷"]
 
-    ROOM --> STORE[("📦 資料庫<br/>.demo-store.json")]
+    REVIEW -->|批准 / 修正| APPLY
+    REVIEW -->|略過| HOLD["只保留訊息，不改房態"]
+
+    ROOM --> STORE[("file-backed demo store<br/>.demo-store.json")]
     HANDOFF --> STORE
+    MSG --> STORE
+    REVIEW --> STORE
 
-    STORE --> AI["🤖 AI 建議引擎<br/>8 條分析規則"]
-    STORE --> NOTIF["🔔 通知中心<br/>7+ 條即時規則"]
+    STORE --> DOC["文件追蹤<br/>可推進 / 可退回 / 有原因 / 有 log"]
+    STORE --> FU["跟進事項<br/>可開始 / 完成 / 略過 / 退回 / reopen"]
+    STORE --> NOTIF["通知中心<br/>聚合營運警報"]
+    STORE --> SUGGEST["AI 建議 / 管理摘要"]
+    STORE --> REPORT["每日報告"]
 
-    AI --> SUGGEST["💡 AI 管理建議"]
-    SUGGEST -->|一鍵建立| FOLLOWUP["📋 跟進事項"]
-
-    NOTIF --> ALERT["⚠️ 即時營運提醒<br/>超時 · 超期 · 衝突 · 到期"]
-
-    STORE --> DASH["📊 儀表板"]
-    DASH --> D1["訊息中心"]
-    DASH --> D2["房間看板"]
-    DASH --> D3["文件追蹤"]
-    DASH --> D4["預約日曆"]
-    DASH --> D5["每日報告"]
-
-    style CHECK fill:#FEF3C7,stroke:#F59E0B
-    style AUTO fill:#D1FAE5,stroke:#10B981
-    style REVIEW fill:#FEE2E2,stroke:#EF4444
-    style AI fill:#EDE9FE,stroke:#8B5CF6
-    style NOTIF fill:#DBEAFE,stroke:#3B82F6
-    style STORE fill:#F3F4F6,stroke:#6B7280
+    DOC --> AUDIT["Audit Log"]
+    FU --> AUDIT
 ```
 
-### 核心流程說明
+---
 
-| 階段 | 說明 |
-|------|------|
-| **訊息輸入** | 前線員工照常在 WhatsApp 溝通，匯出 `.txt` 或透過系統輸入 |
-| **解析與分流** | Parser 自動提取房號、動作、部門。高信心度直接生效；低信心度或 summary 訊息進人工覆核 |
-| **人工覆核** | 管理員檢查解析結果，可批准、修正或略過，修正後才套用房間狀態 |
-| **AI 分析** | 規則引擎持續掃描全部數據，產出分優先級的管理建議 |
-| **一鍵跟進** | 從 AI 建議直接建立跟進任務，分配部門與追蹤狀態 |
-| **即時通知** | 系統自動偵測交接超時、文件超期、預約衝突、任務到期等異常 |
+## AI-driven 是怎樣做的
 
-## 主要功能模組
+目前 parsing 層是 **Hybrid AI**：
 
-1. **訊息中心即時動態 (Message Feed)**：自動分類顯示原始 WhatsApp 訊息，並展示 AI 標籤化的解析結果（房號、置信度、發出對象）。
-2. **部門交接信號面板 (Handoff Signals)**：自動捕獲如「工程部 → 清潔部」的待辦事項，讓負責部門能夠在此面板點擊「確認」接收。
-3. **房間狀態總覽看板 (Room Status Board)**：以網格視覺化方式，展示全棟 200+ 個單位的最新工程、清潔與租務狀態。支援顏色警告與多維度過濾。
-4. **文件追蹤系統 (Document Tracker)**：追蹤租務交接相關文件 (DRF, TA, Surrender, Inventory) 的簽署進度，以及逾期警告。
-5. **預約日曆 (Bookings)**：整合睇樓、拍攝及住客活動的排期時間表。
-6. **WhatsApp 匯出檔解析器 (Upload Demo Parser)**：支援手動上傳由 WhatsApp 手機端匯出的 `.txt` 紀錄檔，系統會精準合併多段訊息並批次解析為交接任務。（目前為取代 Twilio API 的 Demo 備案）
-7. **每日報告自動產生 (Auto Daily Report)**：系統能依據當日的溝通紀錄，一鍵生成原本需人工整理的「是日跟進」文字報告，方便直接貼回 WhatsApp。
-8. **AI 管理建議 (AI Suggestions)**：規則引擎分析房間、交接、文件、預約數據，產出分優先級的管理建議（清潔積壓、工程瓶頸、文件超期等）。
-9. **跟進事項 (Follow-ups)**：從 AI 建議一鍵建立跟進任務，支援狀態流轉（待處理 → 進行中 → 完成 / 略過）與部門指派。
-10. **人工覆核 (Review Queue)**：低信心度或 summary 類型訊息自動排入覆核佇列，管理員可批准、修正或略過，確保房間狀態不被錯誤更新。
-11. **通知中心 (Notifications)**：即時計算營運異常提醒，包括交接超時、文件超期、預約衝突、待覆核、緊急跟進、任務到期等。
+### 1. 前處理仍然保留規則
 
-## 技術架構 (Technology Stack)
+系統先做這些穩定的事情：
 
-目前版本為 **Phase 1 (Core MVP)** 的前端與邏輯展示原型。
+- sender -> department mapping
+- room regex extraction
+- chat metadata normalization
+- summary / aggregate 訊息初步識別
 
-- **框架：** Next.js 14+ (App Router), React 18, TypeScript
-- **樣式：** Tailwind CSS, 玻璃擬物化設計 (Glassmorphism)
-- **圖示庫：** Lucide React
-- **資料儲存：** 檔案式 JSON Store (`.demo-store.json`) — *註：後續可無縫銜接 Supabase (PostgreSQL)*
-- **AI 解析：** 目前採用進階的 Regex 與關鍵字圖譜結合的方式模擬大語言模型的提取效果 (`src/lib/parser.ts`)，以達成極低的延遲及無須 API Token 的離線展示能力。
+### 2. 真 AI parser
 
-## 如何在本地端運行 (How to Run Locally)
+如果有設定：
 
-1. 安裝套件：
-   ```bash
-   npm install
-   ```
+- `ANTHROPIC_API_KEY`
+- 或 `OPENAI_API_KEY`
 
-2. 啟動開發伺服器：
-   ```bash
-   npm run dev
-   ```
+系統會把訊息交給 LLM，要求它回傳 JSON：
 
-3. 開啟瀏覽器並前往 `http://localhost:3000` 即可開始體驗。
+- `rooms`
+- `action`
+- `type`
+- `from_dept`
+- `to_dept`
+- `confidence`
+- `explanation`
 
-## 示範與測試指南 (Demo Guide)
+### 3. 規則 fallback
 
-針對系統展示，你可以依照以下劇本操作：
+如果：
 
-1. 點擊頂部導航前往 **「上傳訊息」**。
-2. 準備一份真實的 WhatsApp `.txt` 匯出檔並拖曳上傳（系統會自動過濾系統訊息、合併多行對話，並解析出其中的「房號」與「動作」）。
-3. 前往 **「訊息中心」**，你會看到剛才匯入的對話已被彩色標籤化。右側的「交接信號」列表也會出現這批訊息所觸發的跨部門任務。
-4. 點擊待確認事項的「確認」按鈕。
-5. 前往 **「房間看板」**，觀察到觸發事件的相關房間（如完成了工程）狀態已由綠轉黃，並亮出警告圖示。
-6. 前往 **「每日報告」**，系統已經把剛才的事件全部梳理為點列式的「是日跟進」摘要。
+- 沒有設定 API key
+- 或 AI API timeout / 失敗
 
-## 目錄結構簡介
+系統會自動退回規則 parser，prototype 仍然可用。
 
-- `/src/app/`：Next.js App Router 的所有分頁路由與頁面元件。
-- `/src/app/api/`：模擬後端資料庫讀寫的 API 路由。
-- `/src/components/`：跨頁面使用的獨立 UI 元件（如側邊導覽列 `Sidebar.tsx`）。
-- `/src/lib/`：核心業務邏輯。
-  - `store.ts`：檔案式 JSON 資料庫實作與初始種子資料生成。
-  - `parser.ts`：WhatsApp 訊息的意圖辨識與實體擷取引擎。
-  - `ingest.ts`：統一的資料寫入中樞，處理從接收訊息到觸發狀態變更的完整生命週期，含 summary 訊息偵測與覆核分流。
-  - `suggestions.ts`：AI 建議規則引擎（8 條分析規則）。
-  - `notifications.ts`：即時通知生成引擎（7+ 條規則）。
-  - `types.ts`：全域 TypeScript 型別定義。
-  - `utils.ts`：共用的幫助函式（如時間格式化、Tailwind CSS class 合併）。
+### 4. 保守套用
+
+就算有 AI，也不會盲目直接改狀態。
+
+像以下情況仍然會進 review queue：
+
+- 低信心
+- summary / bullet list
+- 多房多動作混合
+- 模糊工程完成訊息
+
+### 5. UI 會顯示 AI reasoning
+
+訊息中心每張卡會顯示：
+
+- 由哪個 parser 判斷
+  - Claude AI
+  - OpenAI
+  - Rule engine
+  - Human review
+- 信心度
+- 判斷原因 explanation
+
+---
+
+## 重要業務規則
+
+這些規則是刻意設計，不是 bug：
+
+### `完成` 不等於 `handoff`
+
+以下只算進度更新，不會直接推去清潔：
+
+- `23D 已完成油漆`
+- `31K 已調整大門鉸，回復正常`
+- `已處理部分工程`
+
+### 只有明確 `可清 / 可清潔` 才算 handoff
+
+例如：
+
+- `10F 已完成，可清潔`
+- `19C完成可清`
+
+才會建立：
+
+- `eng -> clean`
+
+### summary 訊息不直接改狀態
+
+例如：
+
+- `是日跟進`
+- 多行 bullet list
+- 多房多種 action 混在一起
+
+會先進 `Review Queue`。
+
+---
+
+## 主要功能
+
+### 1. 訊息中心
+
+- 顯示原始文字
+- 顯示解析結果
+- 顯示 AI explanation
+- 顯示 parser 來源與信心度
+
+### 2. 交接信號
+
+- 顯示房間、from/to dept、action、status
+- 支援 acknowledge
+
+### 3. 房間看板
+
+- 顯示 engineering / cleaning / lease status
+- 顯示 needs attention
+- 可由通知上下文帶房號高亮
+
+### 4. 人工覆核
+
+- 低信心與 summary 訊息自動進 queue
+- 可批准、修正、略過
+- 修正後才套用房態與 handoff
+
+### 5. AI 建議
+
+- 根據房間 / handoff / 文件 / booking / followup 產出管理摘要
+- 可一鍵建立 follow-up
+
+### 6. 跟進事項
+
+- `open -> in_progress -> done / dismissed`
+- 支援退回與 reopen
+- 所有狀態改動必須填 `操作人 + 原因`
+- 會留下 audit log
+
+### 7. 文件追蹤
+
+- 文件 pipeline 推進
+- 支援退回上一步
+- 所有推進 / 退回都要填 `操作人 + 原因`
+- 會留下 audit log
+
+### 8. 通知中心
+
+目前已聚合以下警報：
+
+- handoff timeout
+- document overdue
+- booking conflict
+- pending review
+- urgent follow-up
+- follow-up due
+- checkout pending
+- cleaning waiting
+
+### 9. 每日報告
+
+- 依據已解析訊息與 handoff 產生「是日跟進」
+
+---
+
+## 技術架構
+
+- **Frontend**：Next.js 14, React 18, TypeScript
+- **Styling**：Tailwind CSS
+- **UI Icon**：Lucide React
+- **Current Storage**：`.demo-store.json`
+- **AI Parser**：
+  - Anthropic Messages API（可選）
+  - OpenAI Chat Completions API（可選）
+  - Rule parser fallback
+- **Current Auth**：demo login gate
+
+---
+
+## 目前不是什麼
+
+這個版本仍然不是：
+
+- 真實 WhatsApp realtime bridge
+- 正式多用戶資料庫
+- 正式 RBAC auth system
+- production-ready deployment
+
+它現在是：
+
+**可展示、可驗證 workflow、可做 management demo 的 prototype。**
+
+---
+
+## 本地運行
+
+### 1. 安裝
+
+```bash
+npm install
+```
+
+### 2. 設定環境變數
+
+複製：
+
+```bash
+cp .env.example .env.local
+```
+
+可選設定：
+
+- `SYSTEM_PASSWORD`
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_MODEL`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+
+如果沒有 AI key，系統會自動 fallback 到規則 parser。
+
+### 3. 啟動
+
+```bash
+npm run dev
+```
+
+或：
+
+```bash
+npm run build
+npm run start
+```
+
+---
+
+## Demo 建議方式
+
+最推薦的 demo 方式是：
+
+1. 左邊開真實 WhatsApp Web
+2. 右邊開本系統
+3. 先展示原文
+4. 再展示中間 AI 如何理解
+5. 最後展示右邊 handoff / review / followup / documents log
+
+這樣 management 最容易信。
+
+---
+
+## 關鍵檔案
+
+### 核心邏輯
+
+- `/src/lib/parser.ts`
+- `/src/lib/ai/parse-message.ts`
+- `/src/lib/ingest.ts`
+- `/src/lib/notifications.ts`
+- `/src/lib/audit.ts`
+- `/src/lib/store.ts`
+- `/src/lib/types.ts`
+
+### API
+
+- `/src/app/api/messages/route.ts`
+- `/src/app/api/upload/route.ts`
+- `/src/app/api/parse/route.ts`
+- `/src/app/api/reviews/route.ts`
+- `/src/app/api/documents/route.ts`
+- `/src/app/api/followups/route.ts`
+
+### 主要頁面
+
+- `/src/app/page.tsx`
+- `/src/app/reviews/page.tsx`
+- `/src/app/documents/page.tsx`
+- `/src/app/followups/page.tsx`
+- `/src/app/notifications/page.tsx`
+- `/src/app/rooms/page.tsx`
+
+---
+
+## 已知限制
+
+- `.demo-store.json` 不適合多人同時寫入
+- auth 仍是 demo gate，不是真正 user identity
+- documents / followups 的 `操作人` 目前是頁面輸入欄，不是正式登入身份
+- notifications 雖已聚合，但仍未是 persisted alert lifecycle
+- 測試覆蓋不足，特別是 parser / review / notifications / audit transitions
+
+---
+
+## 補充文件
+
+如需做 code review，請先看：
+
+- `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/docs/CODEX_SESSION_HANDOFF_2026-03-10.md`

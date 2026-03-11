@@ -1,6 +1,8 @@
 import { Message, Handoff, ParseReview, DeptCode, ChatType } from './types';
-import { parseWhatsAppMessage, getDeptFromSender } from './parser';
-import { getStore, saveStore } from './store';
+import { parseMessageWithAI } from './ai/parse-message';
+import { getDeptFromSender } from './parser';
+import { analyzeHandoffSignal, enforceHandoffSafety } from './message-parsing';
+import { StoreData, withStoreWrite } from './store';
 
 // ===========================
 // Shared message ingestion logic
@@ -18,7 +20,7 @@ interface IngestInput {
     id_prefix?: string;     // e.g. "msg" or "msg-upload"
 }
 
-interface IngestResult {
+export interface IngestResult {
     message: Message;
     handoffs: Handoff[];
     review: ParseReview | null;
@@ -32,6 +34,7 @@ let ingestCounter = 0;
  */
 function isSummaryMessage(rawText: string, parsed: { rooms: string[]; action: string | null }): boolean {
     const text = rawText.trim();
+    const handoffSignal = analyzeHandoffSignal(text);
 
     // Starts with "是日跟進" or similar daily summary headers
     if (/^是日跟進|^今日跟進|^daily\s*follow/i.test(text)) return true;
@@ -40,14 +43,18 @@ function isSummaryMessage(rawText: string, parsed: { rooms: string[]; action: st
     const bulletLines = text.split('\n').filter(l => /^\s*[-•·]\s/.test(l));
     if (bulletLines.length >= 2) return true;
 
+    if (parsed.rooms.length >= 2 && handoffSignal.allowsImmediateHandoff && !text.includes('\n')) {
+        return false;
+    }
+
     // Multiple rooms + multiple distinct action keywords in one message
     if (parsed.rooms.length >= 2) {
-        const actionKeywords = [
+        const actionFamilies = [
             /[Cc]heck\s*out|退房/, /[Cc]heck\s*in|入住/, /[Ff]inal/,
-            /完成.*可清|可清潔|可清$/, /執修|維修/, /清潔完成|[Dd]eep\s*clean/,
+            /執修|維修/, /清潔完成|[Dd]eep\s*clean/,
             /脫落|壞|漏水/, /吱膠|打膠/, /[Ll]ogged/,
         ];
-        const matchedCount = actionKeywords.filter(kw => kw.test(text)).length;
+        const matchedCount = actionFamilies.filter(kw => kw.test(text)).length + (handoffSignal.allowsImmediateHandoff ? 1 : 0);
         if (matchedCount >= 2) return true;
     }
 
@@ -71,8 +78,7 @@ function isAmbiguousEngineeringCompletion(
     return parsed.action === '工程進度更新' && parsed.confidence < 0.75;
 }
 
-export function ingestMessage(input: IngestInput): IngestResult {
-    const store = getStore();
+async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Promise<IngestResult> {
     ingestCounter++;
 
     // 1. Determine sender department
@@ -80,11 +86,14 @@ export function ingestMessage(input: IngestInput): IngestResult {
         input.sender_dept || getDeptFromSender(input.sender_name);
 
     // 2. Parse message with AI-simulated parser
-    const parsed = parseWhatsAppMessage(
-        input.raw_text,
-        input.sender_name,
-        senderDept || undefined
-    );
+    const parsed = await parseMessageWithAI({
+        rawText: input.raw_text,
+        senderName: input.sender_name,
+        senderDept: senderDept || undefined,
+        chatName: input.chat_name || input.wa_group || 'SOHO 前線🏡🧹🦫🐿️',
+    });
+    const safeParsed = enforceHandoffSafety(input.raw_text, parsed);
+    const handoffSignal = analyzeHandoffSignal(input.raw_text);
 
     // 3. Build message object
     const now = new Date().toISOString();
@@ -102,10 +111,13 @@ export function ingestMessage(input: IngestInput): IngestResult {
         chat_name: chatName,
         chat_type: chatType,
         sent_at: sentAt,
-        parsed_room: parsed.rooms,
-        parsed_action: parsed.action,
-        parsed_type: parsed.type,
-        confidence: parsed.confidence,
+        parsed_room: safeParsed.rooms,
+        parsed_action: safeParsed.action,
+        parsed_type: safeParsed.type,
+        confidence: safeParsed.confidence,
+        parsed_explanation: safeParsed.explanation || null,
+        parsed_by: safeParsed.engine || 'rules',
+        parsed_model: safeParsed.model || 'rule-engine',
         created_at: now,
     };
 
@@ -113,9 +125,10 @@ export function ingestMessage(input: IngestInput): IngestResult {
     store.messages.push(msg);
 
     // 5. Check if review is needed
-    const isSummary = isSummaryMessage(input.raw_text, parsed);
-    const ambiguousCompletion = isAmbiguousEngineeringCompletion(input.raw_text, parsed);
-    const needsReview = parsed.confidence < 0.75 || !parsed.action || isSummary || ambiguousCompletion;
+    const isSummary = isSummaryMessage(input.raw_text, safeParsed);
+    const ambiguousCompletion = isAmbiguousEngineeringCompletion(input.raw_text, safeParsed);
+    const hasFutureHandoffLanguage = handoffSignal.hasExplicitPositiveHandoff && handoffSignal.hasFutureContext;
+    const needsReview = safeParsed.confidence < 0.75 || !safeParsed.action || isSummary || ambiguousCompletion || hasFutureHandoffLanguage;
     let review: ParseReview | null = null;
 
     if (needsReview) {
@@ -126,17 +139,17 @@ export function ingestMessage(input: IngestInput): IngestResult {
             raw_text: input.raw_text,
             sender_name: input.sender_name,
             sender_dept: senderDept || 'conc',
-            confidence: parsed.confidence,
-            suggested_rooms: parsed.rooms,
-            suggested_action: parsed.action,
-            suggested_type: parsed.type,
-            suggested_from_dept: parsed.from_dept,
-            suggested_to_dept: parsed.to_dept,
-            reviewed_rooms: parsed.rooms,
-            reviewed_action: parsed.action,
-            reviewed_type: parsed.type,
-            reviewed_from_dept: parsed.from_dept,
-            reviewed_to_dept: parsed.to_dept,
+            confidence: safeParsed.confidence,
+            suggested_rooms: safeParsed.rooms,
+            suggested_action: safeParsed.action,
+            suggested_type: safeParsed.type,
+            suggested_from_dept: safeParsed.from_dept,
+            suggested_to_dept: safeParsed.to_dept,
+            reviewed_rooms: safeParsed.rooms,
+            reviewed_action: safeParsed.action,
+            reviewed_type: safeParsed.type,
+            reviewed_from_dept: safeParsed.from_dept,
+            reviewed_to_dept: safeParsed.to_dept,
             review_status: 'pending',
             reviewed_by: null,
             reviewed_at: null,
@@ -150,18 +163,18 @@ export function ingestMessage(input: IngestInput): IngestResult {
     const handoffs: Handoff[] = [];
 
     if (!needsReview) {
-        const effectFromDept = parsed.from_dept || senderDept;
-        const effectToDept = parsed.to_dept;
+        const effectFromDept = safeParsed.from_dept || senderDept;
+        const effectToDept = safeParsed.to_dept;
 
         // Create handoffs for handoff-type messages
-        if (parsed.type === 'handoff' && effectFromDept && effectToDept) {
-            for (const roomId of parsed.rooms) {
+        if (safeParsed.type === 'handoff' && handoffSignal.allowsImmediateHandoff && effectFromDept && effectToDept) {
+            for (const roomId of safeParsed.rooms) {
                 const ho: Handoff = {
                     id: `ho-${Date.now()}-${ingestCounter}-${roomId}`,
                     room_id: roomId,
                     from_dept: effectFromDept,
                     to_dept: effectToDept,
-                    action: parsed.action || '',
+                    action: safeParsed.action || '',
                     status: 'pending',
                     triggered_by: msg.id,
                     created_at: sentAt,
@@ -173,17 +186,29 @@ export function ingestMessage(input: IngestInput): IngestResult {
         }
 
         // Update room statuses based on parsed action
-        for (const roomId of parsed.rooms) {
+        for (const roomId of safeParsed.rooms) {
             const room = store.rooms.find(r => r.id === roomId);
             if (!room) continue;
 
-            applyRoomStatusUpdate(room, parsed.action, effectFromDept || null, msg.sender_name);
+            applyRoomStatusUpdate(room, safeParsed.action, effectFromDept || null, msg.sender_name);
         }
     }
 
-    saveStore(store);
-
     return { message: msg, handoffs, review };
+}
+
+export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
+    return withStoreWrite(store => ingestMessageIntoStore(store, input));
+}
+
+export async function ingestMessagesBatch(inputs: IngestInput[]): Promise<IngestResult[]> {
+    return withStoreWrite(async store => {
+        const results: IngestResult[] = [];
+        for (const input of inputs) {
+            results.push(await ingestMessageIntoStore(store, input));
+        }
+        return results;
+    });
 }
 
 /**

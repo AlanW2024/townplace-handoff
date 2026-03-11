@@ -2,6 +2,7 @@
 // TOWNPLACE SOHO — AI Suggestion Engine
 // ===========================
 
+import { generateNotifications, NotificationType } from './notifications';
 import { getStore } from './store';
 import { Room, Handoff, Document, Booking, DeptCode, DEPT_INFO } from './types';
 
@@ -37,6 +38,14 @@ const CATEGORY_LABELS: Record<SuggestionCategory, string> = {
     checkout_followup: '退房跟進',
     workload_imbalance: '工作分配',
     daily_priority: '今日優先',
+};
+
+const OVERLAPPING_NOTIFICATION_BY_CATEGORY: Partial<Record<SuggestionCategory, NotificationType>> = {
+    cleaning_backlog: 'cleaning_waiting',
+    handoff_delay: 'handoff_timeout',
+    document_overdue: 'doc_overdue',
+    booking_conflict: 'booking_conflict',
+    checkout_followup: 'checkout_pending',
 };
 
 // Rule 1: Cleaning backlog — eng=completed + clean=pending
@@ -309,6 +318,7 @@ function analyzeDailyPriorities(rooms: Room[], handoffs: Handoff[], documents: D
 export function generateSuggestions(): Suggestion[] {
     const store = getStore();
     const { rooms, handoffs, documents, bookings } = store;
+    const activeNotificationTypes = new Set(generateNotifications().map(notification => notification.type));
 
     const suggestions: Suggestion[] = [
         ...analyzeCleaningBacklog(rooms),
@@ -319,7 +329,10 @@ export function generateSuggestions(): Suggestion[] {
         ...analyzeCheckoutFollowup(rooms),
         ...analyzeWorkloadImbalance(rooms, handoffs),
         ...analyzeDailyPriorities(rooms, handoffs, documents, bookings),
-    ];
+    ].filter(suggestion => {
+        const overlappingType = OVERLAPPING_NOTIFICATION_BY_CATEGORY[suggestion.category];
+        return !overlappingType || !activeNotificationTypes.has(overlappingType);
+    });
 
     // Sort: urgent first, then warning, then info
     const priorityOrder: Record<SuggestionPriority, number> = { urgent: 0, warning: 1, info: 2 };

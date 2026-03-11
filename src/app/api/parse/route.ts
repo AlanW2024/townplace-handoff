@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { parseWhatsAppMessage, getDeptFromSender } from '@/lib/parser';
+import { getDeptFromSender } from '@/lib/parser';
+import { parseMessageWithAI } from '@/lib/ai/parse-message';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
     const body = await request.json();
@@ -10,7 +13,11 @@ export async function POST(request: Request) {
     }
 
     const dept = sender_dept || (sender_name ? getDeptFromSender(sender_name) : null);
-    const result = parseWhatsAppMessage(text, sender_name, dept || undefined);
+    const result = await parseMessageWithAI({
+        rawText: text,
+        senderName: sender_name,
+        senderDept: dept || undefined,
+    });
 
     return NextResponse.json(result);
 }
