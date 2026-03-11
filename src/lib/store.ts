@@ -1,10 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, AuditLog, DeptCode, ChatType, ParseEngine } from './types';
+import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, AuditLog, DeptCode, ChatType, ParseEngine, Property, User } from './types';
 import { createAuditLog } from './audit';
 import { parseWhatsAppMessage } from './parser';
 
+export const DEFAULT_PROPERTY_ID = 'tp-soho';
+
 export interface StoreData {
+    properties: Property[];
+    users: User[];
     rooms: Room[];
     messages: Message[];
     handoffs: Handoff[];
@@ -125,6 +129,7 @@ function generateRooms(): Room[] {
             const id = `${floor}${units[i]}`;
             rooms.push({
                 id,
+                property_id: DEFAULT_PROPERTY_ID,
                 floor,
                 unit_letter: units[i],
                 room_type: types[i],
@@ -139,6 +144,7 @@ function generateRooms(): Room[] {
                 last_updated_by: null,
                 needs_attention: false,
                 attention_reason: null,
+                version: 1,
             });
         }
     }
@@ -168,7 +174,7 @@ function generateRooms(): Room[] {
     }));
 }
 
-function generateSeedMessages(): Omit<Message, 'parsed_room' | 'parsed_action' | 'parsed_type' | 'confidence' | 'parsed_explanation' | 'parsed_by' | 'parsed_model'>[] {
+function generateSeedMessages(): Omit<Message, 'parsed_room' | 'parsed_action' | 'parsed_type' | 'confidence' | 'parsed_explanation' | 'parsed_by' | 'parsed_model' | 'property_id'>[] {
     const today = new Date();
     const baseTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 8, 0, 0);
 
@@ -209,13 +215,14 @@ function generateSeedMessages(): Omit<Message, 'parsed_room' | 'parsed_action' |
 
 function generateSeedDocuments(): Document[] {
     const now = new Date().toISOString();
+    const p = DEFAULT_PROPERTY_ID;
     return [
-        { id: 'doc-001', room_id: '17J', doc_type: 'Surrender', status: 'preparing', current_holder: 'Concierge', days_outstanding: 1, notes: '退房文件處理中', updated_at: now },
-        { id: 'doc-002', room_id: '8J', doc_type: 'Surrender', status: 'pending_sign', current_holder: '租客', days_outstanding: 2, notes: '等待租客簽署', updated_at: now },
-        { id: 'doc-003', room_id: '3M', doc_type: 'Newlet', status: 'with_company', current_holder: 'Leasing', days_outstanding: 5, notes: '新租文件，已超期', updated_at: now },
-        { id: 'doc-004', room_id: '10F', doc_type: 'Inventory', status: 'not_started', current_holder: null, days_outstanding: 0, notes: null, updated_at: now },
-        { id: 'doc-005', room_id: '23D', doc_type: 'DRF', status: 'completed', current_holder: null, days_outstanding: 0, notes: '已完成', updated_at: now },
-        { id: 'doc-006', room_id: '25B', doc_type: 'TA', status: 'with_tenant', current_holder: '租客', days_outstanding: 4, notes: '等待租客歸還', updated_at: now },
+        { id: 'doc-001', property_id: p, room_id: '17J', doc_type: 'Surrender', status: 'preparing', current_holder: 'Concierge', days_outstanding: 1, notes: '退房文件處理中', updated_at: now, version: 1 },
+        { id: 'doc-002', property_id: p, room_id: '8J', doc_type: 'Surrender', status: 'pending_sign', current_holder: '租客', days_outstanding: 2, notes: '等待租客簽署', updated_at: now, version: 1 },
+        { id: 'doc-003', property_id: p, room_id: '3M', doc_type: 'Newlet', status: 'with_company', current_holder: 'Leasing', days_outstanding: 5, notes: '新租文件，已超期', updated_at: now, version: 1 },
+        { id: 'doc-004', property_id: p, room_id: '10F', doc_type: 'Inventory', status: 'not_started', current_holder: null, days_outstanding: 0, notes: null, updated_at: now, version: 1 },
+        { id: 'doc-005', property_id: p, room_id: '23D', doc_type: 'DRF', status: 'completed', current_holder: null, days_outstanding: 0, notes: '已完成', updated_at: now, version: 1 },
+        { id: 'doc-006', property_id: p, room_id: '25B', doc_type: 'TA', status: 'with_tenant', current_holder: '租客', days_outstanding: 4, notes: '等待租客歸還', updated_at: now, version: 1 },
     ];
 }
 
@@ -226,12 +233,13 @@ function generateSeedBookings(): Booking[] {
     const dayAfter = new Date(now);
     dayAfter.setDate(dayAfter.getDate() + 2);
 
+    const p = DEFAULT_PROPERTY_ID;
     return [
-        { id: 'bk-001', room_id: '10F', facility: null, booking_type: 'viewing', scheduled_at: new Date(tomorrow.setHours(10, 0)).toISOString(), duration_minutes: 30, booked_by: 'Angel', dept: 'lease', notes: '準租客睇樓', created_at: now.toISOString() },
-        { id: 'bk-002', room_id: '23D', facility: null, booking_type: 'viewing', scheduled_at: new Date(tomorrow.setHours(14, 0)).toISOString(), duration_minutes: 30, booked_by: 'Dennis', dept: 'lease', notes: null, created_at: now.toISOString() },
-        { id: 'bk-003', room_id: null, facility: 'BBQ Area', booking_type: 'tenant_booking', scheduled_at: new Date(dayAfter.setHours(18, 0)).toISOString(), duration_minutes: 120, booked_by: 'Karen Lung', dept: 'comm', notes: '租戶聚會', created_at: now.toISOString() },
-        { id: 'bk-004', room_id: '3M', facility: null, booking_type: 'shooting', scheduled_at: new Date(tomorrow.setHours(11, 0)).toISOString(), duration_minutes: 60, booked_by: 'Cindy', dept: 'lease', notes: '拍攝宣傳照', created_at: now.toISOString() },
-        { id: 'bk-005', room_id: null, facility: 'Social Kitchen', booking_type: 'event', scheduled_at: new Date(dayAfter.setHours(19, 0)).toISOString(), duration_minutes: 180, booked_by: 'Eva', dept: 'comm', notes: '社區活動', created_at: now.toISOString() },
+        { id: 'bk-001', property_id: p, room_id: '10F', facility: null, booking_type: 'viewing', scheduled_at: new Date(tomorrow.setHours(10, 0)).toISOString(), duration_minutes: 30, booked_by: 'Angel', dept: 'lease', notes: '準租客睇樓', created_at: now.toISOString() },
+        { id: 'bk-002', property_id: p, room_id: '23D', facility: null, booking_type: 'viewing', scheduled_at: new Date(tomorrow.setHours(14, 0)).toISOString(), duration_minutes: 30, booked_by: 'Dennis', dept: 'lease', notes: null, created_at: now.toISOString() },
+        { id: 'bk-003', property_id: p, room_id: null, facility: 'BBQ Area', booking_type: 'tenant_booking', scheduled_at: new Date(dayAfter.setHours(18, 0)).toISOString(), duration_minutes: 120, booked_by: 'Karen Lung', dept: 'comm', notes: '租戶聯會', created_at: now.toISOString() },
+        { id: 'bk-004', property_id: p, room_id: '3M', facility: null, booking_type: 'shooting', scheduled_at: new Date(tomorrow.setHours(11, 0)).toISOString(), duration_minutes: 60, booked_by: 'Cindy', dept: 'lease', notes: '拍攝宣傳照', created_at: now.toISOString() },
+        { id: 'bk-005', property_id: p, room_id: null, facility: 'Social Kitchen', booking_type: 'event', scheduled_at: new Date(dayAfter.setHours(19, 0)).toISOString(), duration_minutes: 180, booked_by: 'Eva', dept: 'comm', notes: '社區活動', created_at: now.toISOString() },
     ];
 }
 
@@ -275,6 +283,7 @@ function buildSeedStore(): StoreData {
         const parsed = parseWhatsAppMessage(message.raw_text, message.sender_name, message.sender_dept);
         return {
             ...message,
+            property_id: DEFAULT_PROPERTY_ID,
             parsed_room: parsed.rooms,
             parsed_action: parsed.action,
             parsed_type: parsed.type,
@@ -297,6 +306,7 @@ function buildSeedStore(): StoreData {
         for (const roomId of message.parsed_room) {
             handoffs.push({
                 id: `ho-${handoffs.length + 1}`,
+                property_id: DEFAULT_PROPERTY_ID,
                 room_id: roomId,
                 from_dept: parsed.from_dept,
                 to_dept: parsed.to_dept,
@@ -305,11 +315,30 @@ function buildSeedStore(): StoreData {
                 triggered_by: message.id,
                 created_at: message.sent_at,
                 acknowledged_at: null,
+                version: 1,
             });
         }
     }
 
+    const seedProperties: Property[] = [{
+        id: DEFAULT_PROPERTY_ID,
+        name: 'TOWNPLACE SOHO',
+        address: '16 Queens Road West, Hong Kong',
+        floors: { min: 3, max: 32 },
+        units: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M'],
+        created_at: new Date().toISOString(),
+    }];
+
+    const seedUsers: User[] = [
+        { id: 'user-admin', name: 'Admin', email: 'admin@townplace.hk', role: 'admin', dept: null, property_ids: [DEFAULT_PROPERTY_ID], is_active: true, created_at: new Date().toISOString() },
+        { id: 'user-karen', name: 'Karen', email: 'karen@townplace.hk', role: 'manager', dept: 'mgmt', property_ids: [DEFAULT_PROPERTY_ID], is_active: true, created_at: new Date().toISOString() },
+        { id: 'user-michael', name: 'Michael', email: 'michael@townplace.hk', role: 'operator', dept: 'conc', property_ids: [DEFAULT_PROPERTY_ID], is_active: true, created_at: new Date().toISOString() },
+        { id: 'user-viewer', name: 'Viewer', email: 'viewer@townplace.hk', role: 'viewer', dept: null, property_ids: [DEFAULT_PROPERTY_ID], is_active: true, created_at: new Date().toISOString() },
+    ];
+
     return {
+        properties: seedProperties,
+        users: seedUsers,
         rooms,
         messages,
         handoffs,
@@ -333,15 +362,20 @@ function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
     const store = rawStore ?? seedStore;
 
     return {
+        properties: store.properties ?? seedStore.properties,
+        users: store.users ?? seedStore.users,
         rooms: (store.rooms ?? seedStore.rooms).map(room => normalizeRoom({
             ...room,
+            property_id: (room as Room).property_id ?? DEFAULT_PROPERTY_ID,
             needs_attention: room.needs_attention ?? false,
             attention_reason: room.attention_reason ?? null,
+            version: (room as Room).version ?? 1,
         } as Room)),
         messages: (store.messages ?? seedStore.messages).map(message => {
             const chatMeta = inferSeedChatMetadata(message.sender_name, message.raw_text);
             return {
                 ...message,
+                property_id: (message as Message).property_id ?? DEFAULT_PROPERTY_ID,
                 wa_group: message.wa_group ?? chatMeta.chat_name,
                 chat_name: message.chat_name ?? message.wa_group ?? chatMeta.chat_name,
                 chat_type: message.chat_type ?? chatMeta.chat_type,

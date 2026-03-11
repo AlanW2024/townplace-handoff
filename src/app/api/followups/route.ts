@@ -61,6 +61,7 @@ export async function POST(request: Request) {
             const now = new Date().toISOString();
             const followup: Followup = {
                 id: `fu-${Date.now()}`,
+                property_id: body.property_id || 'tp-soho',
                 title: body.title || '',
                 description: body.description || '',
                 source_type: sourceType,
@@ -73,6 +74,7 @@ export async function POST(request: Request) {
                 due_at: body.due_at || null,
                 created_at: now,
                 updated_at: now,
+                version: 1,
             };
 
             store.followups.push(followup);

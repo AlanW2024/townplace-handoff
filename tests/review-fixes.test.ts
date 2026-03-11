@@ -21,12 +21,13 @@ function makeRoom(id: string, overrides: Record<string, unknown> = {}) {
     const floor = Number(id.slice(0, -1));
     return {
         id,
+        property_id: 'tp-soho',
         floor,
         unit_letter: id.slice(-1),
         room_type: 'Studio',
-        eng_status: 'n_a',
-        clean_status: 'n_a',
-        lease_status: 'vacant',
+        eng_status: 'n_a' as const,
+        clean_status: 'n_a' as const,
+        lease_status: 'vacant' as const,
         tenant_name: null,
         lease_start: null,
         lease_end: null,
@@ -35,6 +36,7 @@ function makeRoom(id: string, overrides: Record<string, unknown> = {}) {
         last_updated_by: null,
         needs_attention: false,
         attention_reason: null,
+        version: 1,
         ...overrides,
     };
 }
@@ -63,6 +65,7 @@ describe.sequential('Claude Review Fixes', () => {
                     await new Promise(resolve => setTimeout(resolve, 40));
                     store.followups.push({
                         id: 'fu-1',
+                        property_id: 'tp-soho',
                         title: 'first',
                         description: 'first',
                         source_type: 'manual',
@@ -75,11 +78,13 @@ describe.sequential('Claude Review Fixes', () => {
                         due_at: null,
                         created_at: isoNow(),
                         updated_at: isoNow(),
+                        version: 1,
                     });
                 }),
                 storeMod.withStoreWrite(store => {
                     store.followups.push({
                         id: 'fu-2',
+                        property_id: 'tp-soho',
                         title: 'second',
                         description: 'second',
                         source_type: 'manual',
@@ -92,6 +97,7 @@ describe.sequential('Claude Review Fixes', () => {
                         due_at: null,
                         created_at: isoNow(),
                         updated_at: isoNow(),
+                        version: 1,
                     });
                 }),
             ]);
@@ -141,6 +147,7 @@ describe.sequential('Claude Review Fixes', () => {
                 const now = isoNow();
                 store.messages.push({
                     id: 'msg-review-1',
+                    property_id: 'tp-soho',
                     raw_text: '10F 已完成，可清潔',
                     sender_name: 'Vic Lee',
                     sender_dept: 'eng',
@@ -159,6 +166,7 @@ describe.sequential('Claude Review Fixes', () => {
                 });
                 store.parse_reviews.push({
                     id: 'rev-a',
+                    property_id: 'tp-soho',
                     message_id: 'msg-review-1',
                     raw_text: '10F 已完成，可清潔',
                     sender_name: 'Vic Lee',
@@ -179,6 +187,7 @@ describe.sequential('Claude Review Fixes', () => {
                     reviewed_at: null,
                     created_at: now,
                     updated_at: now,
+                    version: 1,
                 });
             });
 
@@ -200,6 +209,7 @@ describe.sequential('Claude Review Fixes', () => {
                 const now = isoNow();
                 store.messages.push({
                     id: 'msg-review-2',
+                    property_id: 'tp-soho',
                     raw_text: '10F 已完成，可清潔',
                     sender_name: 'Vic Lee',
                     sender_dept: 'eng',
@@ -218,6 +228,7 @@ describe.sequential('Claude Review Fixes', () => {
                 });
                 store.parse_reviews.push({
                     id: 'rev-b',
+                    property_id: 'tp-soho',
                     message_id: 'msg-review-2',
                     raw_text: '10F 已完成，可清潔',
                     sender_name: 'Vic Lee',
@@ -238,9 +249,11 @@ describe.sequential('Claude Review Fixes', () => {
                     reviewed_at: null,
                     created_at: now,
                     updated_at: now,
+                    version: 1,
                 });
                 store.parse_reviews.push({
                     id: 'rev-c',
+                    property_id: 'tp-soho',
                     message_id: 'msg-review-2',
                     raw_text: '10F 已完成，可清潔',
                     sender_name: 'Vic Lee',
@@ -261,6 +274,7 @@ describe.sequential('Claude Review Fixes', () => {
                     reviewed_at: null,
                     created_at: now,
                     updated_at: now,
+                    version: 1,
                 });
             });
 
@@ -296,6 +310,7 @@ describe.sequential('Claude Review Fixes', () => {
                 ];
                 store.documents = [{
                     id: 'doc-notif-1',
+                    property_id: 'tp-soho',
                     room_id: '10F',
                     doc_type: 'Inventory',
                     status: 'preparing',
@@ -303,9 +318,11 @@ describe.sequential('Claude Review Fixes', () => {
                     days_outstanding: 6,
                     notes: null,
                     updated_at: isoNow(),
+                    version: 1,
                 }];
                 store.followups = [{
                     id: 'fu-urgent-due',
+                    property_id: 'tp-soho',
                     title: 'urgent',
                     description: 'urgent',
                     source_type: 'manual',
@@ -318,9 +335,11 @@ describe.sequential('Claude Review Fixes', () => {
                     due_at: isoNow(60 * 60 * 1000),
                     created_at: isoNow(),
                     updated_at: isoNow(),
+                    version: 1,
                 }];
                 store.bookings = [{
                     id: 'bk-future',
+                    property_id: 'tp-soho',
                     room_id: '20A',
                     facility: null,
                     booking_type: 'viewing',

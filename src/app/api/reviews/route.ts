@@ -55,6 +55,7 @@ export async function POST(request: Request) {
     const review = await withStoreWrite(store => {
         const nextReview: ParseReview = {
             id: `rev-${Date.now()}`,
+            property_id: body.property_id || 'tp-soho',
             message_id: body.message_id || '',
             raw_text: body.raw_text || '',
             sender_name: body.sender_name || '',
@@ -75,6 +76,7 @@ export async function POST(request: Request) {
             reviewed_at: null,
             created_at: now,
             updated_at: now,
+            version: 1,
         };
 
         store.parse_reviews.push(nextReview);
@@ -195,6 +197,7 @@ export async function PUT(request: Request) {
                     for (const roomId of rooms) {
                         const nextHandoff: Handoff = {
                             id: `ho-rev-${Date.now()}-${roomId}`,
+                            property_id: review.property_id ?? 'tp-soho',
                             room_id: roomId,
                             from_dept: fromDept,
                             to_dept: toDept,
@@ -203,6 +206,7 @@ export async function PUT(request: Request) {
                             triggered_by: review.message_id,
                             created_at: now,
                             acknowledged_at: null,
+                            version: 1,
                         };
 
                         if (!handoffExists(store, nextHandoff)) {

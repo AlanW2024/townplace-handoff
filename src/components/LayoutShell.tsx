@@ -6,10 +6,10 @@ import { ToastProvider } from '@/components/Toast';
 
 export function LayoutShell({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
-    const isLoginPage = pathname === '/login';
+    const isStandalonePage = pathname === '/login' || pathname?.startsWith('/gemini');
 
-    if (isLoginPage) {
-        return <>{children}</>;
+    if (isStandalonePage) {
+        return <ToastProvider>{children}</ToastProvider>;
     }
 
     return (

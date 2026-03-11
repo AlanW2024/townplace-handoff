@@ -27,6 +27,7 @@ export interface AuditFieldChange {
 
 export interface Room {
     id: string;
+    property_id: string;
     floor: number;
     unit_letter: string;
     room_type: string;
@@ -41,10 +42,12 @@ export interface Room {
     last_updated_by: string | null;
     needs_attention: boolean;
     attention_reason: string | null;
+    version: number;
 }
 
 export interface Message {
     id: string;
+    property_id: string;
     raw_text: string;
     sender_name: string;
     sender_dept: DeptCode;
@@ -64,6 +67,7 @@ export interface Message {
 
 export interface Handoff {
     id: string;
+    property_id: string;
     room_id: string;
     from_dept: DeptCode;
     to_dept: DeptCode;
@@ -72,10 +76,12 @@ export interface Handoff {
     triggered_by: string;
     created_at: string;
     acknowledged_at: string | null;
+    version: number;
 }
 
 export interface Document {
     id: string;
+    property_id: string;
     room_id: string;
     doc_type: DocType;
     status: DocStatus;
@@ -83,10 +89,12 @@ export interface Document {
     days_outstanding: number;
     notes: string | null;
     updated_at: string;
+    version: number;
 }
 
 export interface Booking {
     id: string;
+    property_id: string;
     room_id: string | null;
     facility: string | null;
     booking_type: BookingType;
@@ -100,6 +108,7 @@ export interface Booking {
 
 export interface Followup {
     id: string;
+    property_id: string;
     title: string;
     description: string;
     source_type: FollowupSourceType;
@@ -112,14 +121,17 @@ export interface Followup {
     due_at: string | null;
     created_at: string;
     updated_at: string;
+    version: number;
 }
 
 export interface AuditLog {
     id: string;
+    property_id: string;
     entity_type: AuditEntityType;
     entity_id: string;
     action: AuditAction;
     actor: string;
+    actor_id: string | null;
     reason: string;
     from_status: string | null;
     to_status: string | null;
@@ -131,6 +143,7 @@ export type ReviewStatus = 'pending' | 'approved' | 'corrected' | 'dismissed';
 
 export interface ParseReview {
     id: string;
+    property_id: string;
     message_id: string;
     raw_text: string;
     sender_name: string;
@@ -151,6 +164,7 @@ export interface ParseReview {
     reviewed_at: string | null;
     created_at: string;
     updated_at: string;
+    version: number;
 }
 
 export interface ParseResult {
@@ -163,6 +177,46 @@ export interface ParseResult {
     explanation?: string | null;
     engine?: ParseEngine;
     model?: string | null;
+}
+
+// ===========================
+// Multi-tenancy types
+// ===========================
+
+export type UserRole = 'admin' | 'manager' | 'operator' | 'viewer';
+
+export type PermissionAction =
+    | 'room:change_status'
+    | 'handoff:approve'
+    | 'document:edit'
+    | 'document:advance'
+    | 'followup:close'
+    | 'review:approve';
+
+export interface Property {
+    id: string;
+    name: string;
+    address: string;
+    floors: { min: number; max: number };
+    units: string[];
+    created_at: string;
+}
+
+export interface User {
+    id: string;
+    name: string;
+    email: string;
+    role: UserRole;
+    dept: DeptCode | null;
+    property_ids: string[];
+    is_active: boolean;
+    created_at: string;
+}
+
+export interface Permission {
+    action: PermissionAction;
+    allowed: boolean;
+    reason?: string;
 }
 
 // Department display info

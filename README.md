@@ -255,12 +255,52 @@ flowchart LR
 - **Frontend**：Next.js 14, React 18, TypeScript
 - **Styling**：Tailwind CSS
 - **UI Icon**：Lucide React
-- **Current Storage**：`.demo-store.json`
+- **Current Storage**：`.demo-store.json`（已有 Repository 介面抽象，可替換為 Postgres）
 - **AI Parser**：
   - Anthropic Messages API（可選）
   - OpenAI Chat Completions API（可選）
   - Rule parser fallback
-- **Current Auth**：demo login gate
+- **Policy Engine**：可配置策略引擎（`src/lib/policy/`）— 業務規則、閾值、部門映射全部可外部配置
+- **Permissions**：RBAC 權限模型（`src/lib/permissions.ts`）— admin / manager / operator / viewer 四級角色
+- **Auth**：認證抽象層（`src/lib/auth.ts`）— 目前為 demo login gate，可替換為 JWT
+- **Storage Abstraction**：Repository 模式（`src/lib/storage/`）— 為生產資料庫遷移鋪路
+- **Observability**：可觀測性 hook（`src/lib/observability.ts`）— 結構化事件記錄
+- **Testing**：Vitest — 182 個測試，覆蓋 parser、ingest、audit、document pipeline、followup、review lifecycle、policy、permissions
+
+---
+
+## 系統升級亮點
+
+### 測試覆蓋（182 個測試）
+- `tests/parser.test.ts` — 32 個：WhatsApp 訊息解析、部門映射
+- `tests/message-parsing.test.ts` — 27 個：房號提取、handoff 信號分析、安全閘門
+- `tests/ingest.test.ts` — 36 個：房態更新、summary 偵測、整合流程
+- `tests/audit.test.ts` — 7 個：審計日誌建立與查詢
+- `tests/document-pipeline.test.ts` — 15 個：文件推進/退回/驗證
+- `tests/followup-states.test.ts` — 13 個：跟進事項狀態轉換
+- `tests/review-lifecycle.test.ts` — 12 個：覆核批准/修正/衝突偵測
+- `tests/policy.test.ts` — 12 個：策略引擎回歸保護 + 自訂策略
+- `tests/permissions.test.ts` — 23 個：RBAC 權限矩陣
+- `tests/review-fixes.test.ts` — 5 個：原有整合測試
+
+### 策略引擎（`src/lib/policy/`）
+業務規則從散落的 parser/ingest/notifications 中抽取到獨立策略層：
+- `ActionPatternConfig` — 訊息→動作 匹配規則
+- `HandoffPolicy` — 正面/負面/未來語境 regex
+- `ReviewPolicy` — 信心閾值、summary/模糊完成 審查策略
+- `RoomStatusRule` — 房態更新規則
+- `mergePolicy()` — 部分覆蓋預設策略
+
+### 多用戶/多物業資料模型
+- 所有實體新增 `property_id` 外鍵（預設 `tp-soho`）
+- 所有可變實體新增 `version` 欄位（樂觀鎖定）
+- 新增 `Property`、`User`、`UserRole` 類型
+- RBAC 權限函式：`canChangeRoomStatus`、`canApproveHandoff`、`canEditDocument` 等
+
+### 生產強化抽象
+- **Repository 模式**（`src/lib/storage/`）— 將 JSON store 包裝為標準介面
+- **認證抽象**（`src/lib/auth.ts`）— `AuthProvider` 介面 + `DemoAuthProvider`
+- **可觀測性**（`src/lib/observability.ts`）— 結構化事件 hook
 
 ---
 
@@ -269,13 +309,12 @@ flowchart LR
 這個版本仍然不是：
 
 - 真實 WhatsApp realtime bridge
-- 正式多用戶資料庫
-- 正式 RBAC auth system
+- 正式多人資料庫（但已有 Repository 介面可替換）
 - production-ready deployment
 
 它現在是：
 
-**可展示、可驗證 workflow、可做 management demo 的 prototype。**
+**有 182 個測試保護、有策略引擎、有權限模型、有生產遷移路徑的可展示 prototype。**
 
 ---
 
@@ -338,13 +377,24 @@ npm run start
 
 ### 核心邏輯
 
-- `/src/lib/parser.ts`
-- `/src/lib/ai/parse-message.ts`
-- `/src/lib/ingest.ts`
-- `/src/lib/notifications.ts`
-- `/src/lib/audit.ts`
-- `/src/lib/store.ts`
-- `/src/lib/types.ts`
+- `/src/lib/parser.ts` — WhatsApp 訊息解析（支援自訂 pattern config）
+- `/src/lib/ai/parse-message.ts` — Hybrid AI parser
+- `/src/lib/ingest.ts` — 訊息攝入管線 + 房態更新
+- `/src/lib/message-parsing.ts` — Handoff 信號分析 + 安全閘門
+- `/src/lib/notifications.ts` — 聚合通知引擎
+- `/src/lib/suggestions.ts` — AI 建議引擎（8 個分析器）
+- `/src/lib/audit.ts` — 審計日誌（欄位級變更追蹤）
+- `/src/lib/store.ts` — 併發安全的 JSON store
+- `/src/lib/types.ts` — 核心類型定義
+
+### 策略與權限
+
+- `/src/lib/policy/types.ts` — 策略類型定義
+- `/src/lib/policy/defaults.ts` — 預設策略值
+- `/src/lib/permissions.ts` — RBAC 權限檢查
+- `/src/lib/auth.ts` — 認證抽象層
+- `/src/lib/storage/` — Repository 模式儲存抽象
+- `/src/lib/observability.ts` — 可觀測性 hook
 
 ### API
 
@@ -364,20 +414,40 @@ npm run start
 - `/src/app/notifications/page.tsx`
 - `/src/app/rooms/page.tsx`
 
+### 測試
+
+- `/tests/parser.test.ts` — 訊息解析 + 部門映射
+- `/tests/message-parsing.test.ts` — 房號提取 + handoff 信號
+- `/tests/ingest.test.ts` — 攝入管線 + 房態更新
+- `/tests/audit.test.ts` — 審計日誌
+- `/tests/document-pipeline.test.ts` — 文件 pipeline
+- `/tests/followup-states.test.ts` — 跟進事項狀態
+- `/tests/review-lifecycle.test.ts` — 覆核生命週期
+- `/tests/policy.test.ts` — 策略引擎
+- `/tests/permissions.test.ts` — RBAC 權限
+- `/tests/review-fixes.test.ts` — 原有整合測試
+
+### 文件
+
+- `/docs/ARCHITECTURE.md` — 系統架構總覽
+- `/docs/POLICY_ENGINE.md` — 策略引擎使用指南
+- `/docs/PRODUCTION_HARDENING.md` — 生產強化路線圖
+
 ---
 
 ## 已知限制
 
-- `.demo-store.json` 不適合多人同時寫入
-- auth 仍是 demo gate，不是真正 user identity
+- `.demo-store.json` 不適合多人同時寫入（已有 Repository 介面，可遷移至 Postgres）
+- auth 仍是 demo gate，不是真正 user identity（已有 `AuthProvider` 抽象，可替換為 JWT）
 - documents / followups 的 `操作人` 目前是頁面輸入欄，不是正式登入身份
 - notifications 雖已聚合，但仍未是 persisted alert lifecycle
-- 測試覆蓋不足，特別是 parser / review / notifications / audit transitions
+- RBAC 權限模型已定義，但尚未在 API routes 中強制執行
 
 ---
 
 ## 補充文件
 
-如需做 code review，請先看：
-
-- `/Users/yeehowong/.gemini/antigravity/scratch/townplace-handoff/docs/CODEX_SESSION_HANDOFF_2026-03-10.md`
+- `/docs/ARCHITECTURE.md` — 系統架構、數據流、模組依賴
+- `/docs/POLICY_ENGINE.md` — 策略引擎使用說明（新增規則/部門/閾值）
+- `/docs/PRODUCTION_HARDENING.md` — 生產強化路線圖（儲存遷移、併發、認證、隱私、可觀測性）
+- `/docs/CODEX_SESSION_HANDOFF_2026-03-10.md` — 開發交接文件

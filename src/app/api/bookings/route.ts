@@ -33,6 +33,7 @@ export async function POST(request: Request) {
     const booking = await withStoreWrite(store => {
         const nextBooking = {
             id: `bk-${Date.now()}`,
+            property_id: body.property_id || 'tp-soho',
             room_id: body.room_id || null,
             facility: body.facility || null,
             booking_type: body.booking_type as BookingType,

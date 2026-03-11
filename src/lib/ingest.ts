@@ -1,8 +1,10 @@
 import { Message, Handoff, ParseReview, DeptCode, ChatType } from './types';
 import { parseMessageWithAI } from './ai/parse-message';
 import { getDeptFromSender } from './parser';
-import { analyzeHandoffSignal, enforceHandoffSafety } from './message-parsing';
+import { analyzeHandoffSignal, enforceHandoffSafety, HandoffSignalAnalysis } from './message-parsing';
 import { StoreData, withStoreWrite } from './store';
+import { ReviewPolicy, RoomStatusRule } from './policy/types';
+import { DEFAULT_REVIEW_POLICY } from './policy/defaults';
 
 // ===========================
 // Shared message ingestion logic
@@ -32,7 +34,7 @@ let ingestCounter = 0;
  * Detect summary / aggregate messages that should go to review queue
  * instead of being auto-applied with a single action across all rooms.
  */
-function isSummaryMessage(rawText: string, parsed: { rooms: string[]; action: string | null }): boolean {
+export function isSummaryMessage(rawText: string, parsed: { rooms: string[]; action: string | null }): boolean {
     const text = rawText.trim();
     const handoffSignal = analyzeHandoffSignal(text);
 
@@ -61,7 +63,7 @@ function isSummaryMessage(rawText: string, parsed: { rooms: string[]; action: st
     return false;
 }
 
-function isAmbiguousEngineeringCompletion(
+export function isAmbiguousEngineeringCompletion(
     rawText: string,
     parsed: { rooms: string[]; action: string | null; from_dept: DeptCode | null; confidence: number }
 ): boolean {
@@ -104,6 +106,7 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
 
     const msg: Message = {
         id: `${prefix}-${Date.now()}-${ingestCounter}`,
+        property_id: 'tp-soho',
         raw_text: input.raw_text,
         sender_name: input.sender_name,
         sender_dept: senderDept || 'conc',
@@ -135,6 +138,7 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
         // Create a review entry — defer side effects until approved
         review = {
             id: `rev-${Date.now()}-${ingestCounter}`,
+            property_id: 'tp-soho',
             message_id: msg.id,
             raw_text: input.raw_text,
             sender_name: input.sender_name,
@@ -155,6 +159,7 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
             reviewed_at: null,
             created_at: now,
             updated_at: now,
+            version: 1,
         };
         store.parse_reviews.push(review);
     }
@@ -171,6 +176,7 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
             for (const roomId of safeParsed.rooms) {
                 const ho: Handoff = {
                     id: `ho-${Date.now()}-${ingestCounter}-${roomId}`,
+                    property_id: 'tp-soho',
                     room_id: roomId,
                     from_dept: effectFromDept,
                     to_dept: effectToDept,
@@ -179,6 +185,7 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
                     triggered_by: msg.id,
                     created_at: sentAt,
                     acknowledged_at: null,
+                    version: 1,
                 };
                 store.handoffs.push(ho);
                 handoffs.push(ho);
@@ -225,6 +232,28 @@ export async function ingestMessagesBatch(inputs: IngestInput[]): Promise<Ingest
  *  - 吱膠工程: eng=in_progress (minor work)
  *  - 查詢進度: no status change, but mark room updated
  */
+/**
+ * Determine if a parsed message should be routed to the review queue.
+ */
+export function shouldRequireReview(
+    parsed: { confidence: number; action: string | null },
+    signals: {
+        isSummary: boolean;
+        isAmbiguousCompletion: boolean;
+        hasFutureHandoffLanguage: boolean;
+    },
+    policy?: ReviewPolicy
+): boolean {
+    const p = policy ?? DEFAULT_REVIEW_POLICY;
+    return (
+        parsed.confidence < p.minConfidence ||
+        !parsed.action ||
+        (p.alwaysReviewSummary && signals.isSummary) ||
+        (p.alwaysReviewAmbiguousCompletion && signals.isAmbiguousCompletion) ||
+        (p.alwaysReviewFutureHandoff && signals.hasFutureHandoffLanguage)
+    );
+}
+
 export function applyRoomStatusUpdate(
     room: {
         eng_status: string;
@@ -237,13 +266,25 @@ export function applyRoomStatusUpdate(
     },
     action: string | null,
     fromDept: DeptCode | null,
-    senderName: string
+    senderName: string,
+    rules?: RoomStatusRule[]
 ): void {
     if (!action) return;
 
     const now = new Date().toISOString();
     room.last_updated_at = now;
     room.last_updated_by = senderName;
+
+    // Try config-driven rules first
+    if (rules) {
+        const rule = rules.find(r => r.action === action);
+        if (rule) {
+            rule.apply(room);
+            return;
+        }
+        // No matching rule — fall through to default switch for unrecognized actions
+        return;
+    }
 
     switch (action) {
         case '工程完成 → 可清潔':
@@ -317,7 +358,6 @@ export function applyRoomStatusUpdate(
             room.needs_attention = true;
             room.attention_reason = '待回覆進度';
             break;
-        // query / update / acknowledgment: no room status change needed
         default:
             break;
     }

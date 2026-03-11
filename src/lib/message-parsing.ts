@@ -1,4 +1,6 @@
 import { ParseResult } from './types';
+import { HandoffPolicy } from './policy/types';
+import { DEFAULT_HANDOFF_POLICY } from './policy/defaults';
 
 export const ROOM_REGEX = /\b(\d{1,2}[A-Ma-m])\b/g;
 
@@ -47,11 +49,22 @@ export function extractRooms(rawText: string): string[] {
     return rooms;
 }
 
-export function analyzeHandoffSignal(rawText: string): HandoffSignalAnalysis {
+export function analyzeHandoffSignal(rawText: string, policy?: HandoffPolicy): HandoffSignalAnalysis {
     const normalized = normalizeText(rawText);
-    const hasExplicitPositiveHandoff = POSITIVE_HANDOFF_REGEX.test(normalized);
-    const hasNegativeContext = NEGATIVE_HANDOFF_REGEX.test(normalized);
-    const hasFutureContext = FUTURE_HANDOFF_REGEX.test(normalized);
+
+    const positiveRegex = policy
+        ? new RegExp(`(${policy.positivePatterns.join('|')})`, 'i')
+        : POSITIVE_HANDOFF_REGEX;
+    const negativeRegex = policy
+        ? new RegExp(`(${policy.negativePatterns.join('|')})`, 'i')
+        : NEGATIVE_HANDOFF_REGEX;
+    const futureRegex = policy
+        ? new RegExp(`(${policy.futurePatterns.join('|')})`, 'i')
+        : FUTURE_HANDOFF_REGEX;
+
+    const hasExplicitPositiveHandoff = positiveRegex.test(normalized);
+    const hasNegativeContext = negativeRegex.test(normalized);
+    const hasFutureContext = futureRegex.test(normalized);
 
     return {
         hasExplicitPositiveHandoff,

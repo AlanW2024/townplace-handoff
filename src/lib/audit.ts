@@ -1,10 +1,12 @@
 import { AuditAction, AuditEntityType, AuditFieldChange, AuditLog } from './types';
 
 interface CreateAuditLogInput {
+    property_id?: string;
     entity_type: AuditEntityType;
     entity_id: string;
     action: AuditAction;
     actor: string;
+    actor_id?: string | null;
     reason: string;
     from_status?: string | null;
     to_status?: string | null;
@@ -15,10 +17,12 @@ interface CreateAuditLogInput {
 export function createAuditLog(input: CreateAuditLogInput): AuditLog {
     return {
         id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        property_id: input.property_id ?? 'tp-soho',
         entity_type: input.entity_type,
         entity_id: input.entity_id,
         action: input.action,
         actor: input.actor.trim(),
+        actor_id: input.actor_id ?? null,
         reason: input.reason.trim(),
         from_status: input.from_status ?? null,
         to_status: input.to_status ?? null,

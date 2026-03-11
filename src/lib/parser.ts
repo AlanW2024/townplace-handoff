@@ -1,5 +1,7 @@
 import { DeptCode, HandoffType, ParseResult } from './types';
 import { analyzeHandoffSignal, extractRooms } from './message-parsing';
+import { ActionPatternConfig } from './policy/types';
+import { DEFAULT_ACTION_PATTERNS, DEFAULT_STAFF_DIRECTORY } from './policy/defaults';
 
 // ===========================
 // Staff → Department mapping
@@ -160,7 +162,8 @@ const ACTION_PATTERNS: ActionPattern[] = [
 export function parseWhatsAppMessage(
     rawText: string,
     senderName?: string,
-    senderDept?: DeptCode
+    senderDept?: DeptCode,
+    config?: { actionPatterns?: ActionPatternConfig[]; staffDirectory?: Record<string, DeptCode> }
 ): ParseResult {
     const normalizedText = rawText.replace(/\s+/g, ' ').trim();
 
@@ -170,8 +173,19 @@ export function parseWhatsAppMessage(
     // 2. Determine sender department
     let fromDept: DeptCode | null = senderDept || null;
     if (!fromDept && senderName) {
-        fromDept = getDeptFromSender(senderName);
+        fromDept = getDeptFromSender(senderName, config?.staffDirectory);
     }
+
+    // Build runtime action patterns from config or use hardcoded defaults
+    const runtimePatterns: ActionPattern[] = config?.actionPatterns
+        ? config.actionPatterns.map(p => ({
+            keywords: p.keywords.map(k => new RegExp(k, 'i')),
+            action: p.action,
+            type: p.type,
+            from_dept: p.from_dept,
+            to_dept: p.to_dept,
+        }))
+        : ACTION_PATTERNS;
 
     const hasQueryWords = /幾耐|幾時|邊個時間|哪個時間|時間方便|方便|\?|？/.test(normalizedText);
     const hasDamageWords = /脫落|壞|漏水|滴水|損壞|爆|裂/.test(normalizedText);
@@ -234,7 +248,7 @@ export function parseWhatsAppMessage(
     let bestMatch: ActionPattern | null = null;
     let bestConfidence = 0;
 
-    for (const pattern of ACTION_PATTERNS) {
+    for (const pattern of runtimePatterns) {
         if (pattern.type === 'handoff' && !handoffSignal.allowsImmediateHandoff) {
             continue;
         }
@@ -300,14 +314,18 @@ export function parseWhatsAppMessage(
 // ===========================
 // Determine dept from sender name
 // ===========================
-export function getDeptFromSender(senderName: string): DeptCode | null {
+export function getDeptFromSender(senderName: string, directory?: Record<string, DeptCode>): DeptCode | null {
+    const entries = directory
+        ? Object.entries(directory).sort(([a], [b]) => b.length - a.length)
+        : STAFF_DEPT_ENTRIES;
+
     const normalizedName = senderName.toLowerCase().trim();
-    for (const [name, dept] of STAFF_DEPT_ENTRIES) {
+    for (const [name, dept] of entries) {
         if (normalizedName === name.toLowerCase()) {
             return dept;
         }
     }
-    for (const [name, dept] of STAFF_DEPT_ENTRIES) {
+    for (const [name, dept] of entries) {
         if (normalizedName.includes(name.toLowerCase())) {
             return dept;
         }
