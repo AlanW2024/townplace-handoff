@@ -62,6 +62,7 @@ function FollowupsPageContent() {
     const [refreshing, setRefreshing] = useState(false);
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
     const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
+    const [selectedId, setSelectedId] = useState<string | null>(null);
     const [updating, setUpdating] = useState<string | null>(null);
     const [operatorName, setOperatorName] = useState('');
     const [actionReasons, setActionReasons] = useState<Record<string, string>>({});
@@ -162,12 +163,24 @@ function FollowupsPageContent() {
     if (activeOnly) filtered = filtered.filter(f => f.status === 'open' || f.status === 'in_progress');
     if (focusRooms.length > 0) filtered = filtered.filter(f => f.related_rooms.some(room => focusRooms.includes(room)));
     filtered = sortFollowups(filtered);
+    const selectedFollowup = filtered.find(followup => followup.id === selectedId) || filtered[0] || null;
 
     const urgentCount = followups.filter(f => f.priority === 'urgent' && f.status !== 'done' && f.status !== 'dismissed').length;
     const openCount = followups.filter(f => f.status === 'open').length;
     const inProgressCount = followups.filter(f => f.status === 'in_progress').length;
     const doneCount = followups.filter(f => f.status === 'done').length;
     const dismissedCount = followups.filter(f => f.status === 'dismissed').length;
+
+    useEffect(() => {
+        if (filtered.length === 0) {
+            setSelectedId(null);
+            return;
+        }
+
+        if (!filtered.some(followup => followup.id === selectedId)) {
+            setSelectedId(filtered[0].id);
+        }
+    }, [filtered, selectedId]);
 
     if (loading) {
         return (
@@ -294,8 +307,83 @@ function FollowupsPageContent() {
                     <p className="text-sm text-slate-400 mt-1">系統運作正常</p>
                 </div>
             ) : (
-                <div className="grid gap-4">
-                    {filtered.map(followup => {
+                <div className="scan-shell">
+                    <div className="scan-grid">
+                        {filtered.map(followup => {
+                            const priorityCfg = PRIORITY_CONFIG[followup.priority];
+                            const statusCfg = STATUS_CONFIG[followup.status];
+                            const deptInfo = DEPT_INFO[followup.assigned_dept as DeptCode];
+                            const isActive = selectedFollowup?.id === followup.id;
+
+                            return (
+                                <button
+                                    key={followup.id}
+                                    type="button"
+                                    onClick={() => setSelectedId(followup.id)}
+                                    className={cn(
+                                        'scan-tile border-l-4',
+                                        priorityCfg.border,
+                                        isActive && 'scan-tile-active',
+                                        (followup.status === 'done' || followup.status === 'dismissed') && 'opacity-75'
+                                    )}
+                                >
+                                    <div className="space-y-3">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div className="flex gap-1.5 flex-wrap">
+                                                <span className={cn('scan-chip', statusCfg.bg, statusCfg.color)}>
+                                                    {statusCfg.label}
+                                                </span>
+                                                <span className={cn('scan-chip', priorityCfg.bg, priorityCfg.color)}>
+                                                    {priorityCfg.label}
+                                                </span>
+                                            </div>
+                                            <span className="scan-kicker">任務</span>
+                                        </div>
+
+                                        <div>
+                                            <p className="scan-title scan-clamp-3">{followup.title}</p>
+                                            <p className="scan-body scan-clamp-4 mt-2 whitespace-pre-line">{followup.description}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <div className="scan-meta">
+                                            {deptInfo && (
+                                                <span
+                                                    className="scan-chip"
+                                                    style={{ backgroundColor: deptInfo.lightColor, color: deptInfo.color }}
+                                                >
+                                                    {deptInfo.name}
+                                                </span>
+                                            )}
+                                            {followup.related_rooms.length > 0 && (
+                                                <span className="scan-chip bg-slate-100 text-slate-600">
+                                                    {followup.related_rooms.length} 間房
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="scan-meta">
+                                            {followup.due_at && (
+                                                <span className="inline-flex items-center gap-1">
+                                                    <Clock size={11} />
+                                                    截止 {formatDateTime(followup.due_at)}
+                                                </span>
+                                            )}
+                                            {!followup.due_at && (
+                                                <span className="inline-flex items-center gap-1">
+                                                    <Clock size={11} />
+                                                    {formatDateTime(followup.created_at)}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {selectedFollowup && (() => {
+                        const followup = selectedFollowup;
                         const priorityCfg = PRIORITY_CONFIG[followup.priority];
                         const statusCfg = STATUS_CONFIG[followup.status];
                         const deptInfo = DEPT_INFO[followup.assigned_dept as DeptCode];
@@ -304,19 +392,13 @@ function FollowupsPageContent() {
                         const canSubmit = operatorName.trim().length > 0 && reason.trim().length > 0;
 
                         return (
-                            <div
-                                key={followup.id}
-                                className={cn(
-                                    'glass-card p-5 border-l-4',
-                                    priorityCfg.border,
-                                    (followup.status === 'done' || followup.status === 'dismissed') && 'opacity-75'
-                                )}
-                            >
-                                <div className="flex items-start justify-between gap-3 mb-2">
-                                    <h3 className="text-sm font-semibold text-slate-800 leading-snug flex-1 min-w-0">
-                                        {followup.title}
-                                    </h3>
-                                    <div className="flex items-center gap-1.5 shrink-0">
+                            <div className="scan-detail">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <p className="scan-kicker">任務詳情</p>
+                                        <h2 className="text-xl font-bold text-slate-800 mt-2">{followup.title}</h2>
+                                    </div>
+                                    <div className="flex gap-2 flex-wrap justify-end">
                                         <span className={cn('status-badge', statusCfg.bg, statusCfg.color)}>
                                             {statusCfg.label}
                                         </span>
@@ -326,11 +408,11 @@ function FollowupsPageContent() {
                                     </div>
                                 </div>
 
-                                <p className="text-[13px] text-slate-600 leading-relaxed whitespace-pre-line mb-3">
-                                    {followup.description}
-                                </p>
+                                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                                    <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-line">{followup.description}</p>
+                                </div>
 
-                                <div className="flex items-center gap-3 flex-wrap text-xs text-slate-500 mb-3">
+                                <div className="mt-5 flex items-center gap-3 flex-wrap text-xs text-slate-500">
                                     {deptInfo && (
                                         <span
                                             className="status-badge"
@@ -340,38 +422,32 @@ function FollowupsPageContent() {
                                         </span>
                                     )}
                                     {followup.assigned_to && (
-                                        <span className="flex items-center gap-1">
+                                        <span className="inline-flex items-center gap-1">
                                             <User size={12} className="text-slate-400" />
                                             {followup.assigned_to}
                                         </span>
                                     )}
-                                    {followup.due_at && (
-                                        <span className="flex items-center gap-1">
-                                            <Clock size={12} className="text-slate-400" />
-                                            截止 {formatDateTime(followup.due_at)}
-                                        </span>
-                                    )}
                                     {followup.source_type === 'suggestion' && (
-                                        <span className="flex items-center gap-1">
+                                        <span className="inline-flex items-center gap-1 text-violet-600">
                                             <Lightbulb size={12} className="text-violet-400" />
-                                            <span className="text-violet-600">AI 建議</span>
+                                            AI 建議
                                         </span>
                                     )}
-                                    <span className="flex items-center gap-1 text-slate-400">
+                                    <span className="inline-flex items-center gap-1 text-slate-400">
                                         <Clock size={11} />
-                                        {formatDateTime(followup.created_at)}
+                                        建立於 {formatDateTime(followup.created_at)}
                                     </span>
                                 </div>
 
-                                {followup.related_rooms.length > 0 && (
-                                    <div className="flex items-center gap-1.5 flex-wrap mb-3">
-                                        <Home size={12} className="text-slate-400 shrink-0" />
-                                        {followup.related_rooms.map(room => (
+                                <div className="mt-5">
+                                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-[0.18em]">相關房間</p>
+                                    <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                                        {followup.related_rooms.length > 0 ? followup.related_rooms.map(room => (
                                             <Link
                                                 key={room}
                                                 href={`/rooms?highlight=${room}`}
                                                 className={cn(
-                                                    'text-[11px] px-1.5 py-0.5 rounded font-mono transition-colors',
+                                                    'text-[11px] px-2 py-1 rounded-md font-mono transition-colors',
                                                     focusRooms.includes(room)
                                                         ? 'bg-blue-100 text-blue-700'
                                                         : 'bg-slate-100 text-slate-600 hover:bg-blue-100 hover:text-blue-700'
@@ -379,11 +455,13 @@ function FollowupsPageContent() {
                                             >
                                                 {room}
                                             </Link>
-                                        ))}
+                                        )) : (
+                                            <span className="text-sm text-slate-400">沒有指定房間</span>
+                                        )}
                                     </div>
-                                )}
+                                </div>
 
-                                <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 space-y-3">
+                                <div className="mt-5 rounded-2xl border border-slate-200 bg-white/70 p-4 space-y-3">
                                     <div className="flex items-center justify-between gap-3 flex-wrap">
                                         <div>
                                             <p className="text-sm font-semibold text-slate-700">操作原因</p>
@@ -490,7 +568,7 @@ function FollowupsPageContent() {
                                     )}
                                 </div>
 
-                                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 mt-3 space-y-2">
+                                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 mt-5 space-y-2">
                                     <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
                                         <History size={13} />
                                         操作記錄
@@ -503,7 +581,7 @@ function FollowupsPageContent() {
                                 </div>
                             </div>
                         );
-                    })}
+                    })()}
                 </div>
             )}
         </div>

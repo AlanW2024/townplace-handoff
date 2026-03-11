@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getStore, withStoreWrite } from '@/lib/store';
 import { BookingType, DeptCode } from '@/lib/types';
 import { parseJsonBody } from '@/lib/api-utils';
+import { canCreateBooking } from '@/lib/permissions';
+import { assertAllowed, getRouteErrorStatus, requireAuthenticatedUser } from '@/lib/route-mutations';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,24 +52,35 @@ export async function POST(request: Request) {
         }
     }
 
-    const booking = await withStoreWrite(store => {
-        const nextBooking = {
-            id: `bk-${Date.now()}`,
-            property_id: body.property_id || 'tp-soho',
-            room_id: body.room_id || null,
-            facility: body.facility || null,
-            booking_type: body.booking_type as BookingType,
-            scheduled_at: scheduledAt,
-            duration_minutes: body.duration_minutes || 30,
-            booked_by: body.booked_by || '',
-            dept: body.dept as DeptCode,
-            notes: body.notes || null,
-            created_at: new Date().toISOString(),
-        };
+    const auth = await requireAuthenticatedUser(request);
+    if ('error' in auth) return auth.error;
 
-        store.bookings.push(nextBooking);
-        return nextBooking;
-    });
+    try {
+        assertAllowed(canCreateBooking(auth.user, body.dept as DeptCode));
+        const booking = await withStoreWrite(store => {
+            const nextBooking = {
+                id: `bk-${Date.now()}`,
+                property_id: body.property_id || 'tp-soho',
+                room_id: body.room_id || null,
+                facility: body.facility || null,
+                booking_type: body.booking_type as BookingType,
+                scheduled_at: scheduledAt,
+                duration_minutes: body.duration_minutes || 30,
+                booked_by: body.booked_by || '',
+                dept: body.dept as DeptCode,
+                notes: body.notes || null,
+                created_at: new Date().toISOString(),
+            };
 
-    return NextResponse.json(booking, { status: 201 });
+            store.bookings.push(nextBooking);
+            return nextBooking;
+        });
+
+        return NextResponse.json(booking, { status: 201 });
+    } catch (error) {
+        return NextResponse.json(
+            { error: error instanceof Error ? error.message : '建立預約失敗' },
+            { status: getRouteErrorStatus(error) }
+        );
+    }
 }

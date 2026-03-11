@@ -12,6 +12,15 @@ const FLOORS = Array.from({ length: 30 }, (_, i) => 32 - i);
 const UNITS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M'];
 
 type FilterMode = 'all' | 'attention' | 'eng' | 'clean' | 'vacant';
+type RoomScopeFilter = 'active' | 'archived';
+type RoomBoardItem = Room & {
+    display_code?: string;
+    room_scope?: RoomScopeFilter;
+    room_cycle_id?: string | null;
+    lifecycle_status?: 'active' | 'archived';
+    check_out_at?: string | null;
+    archived_cycles_count?: number;
+};
 
 function getEngColor(status: string) {
     switch (status) {
@@ -36,8 +45,8 @@ function RoomCell({
     onClick,
     isHighlighted,
 }: {
-    room: Room | undefined;
-    onClick: (r: Room) => void;
+    room: RoomBoardItem | undefined;
+    onClick: (r: RoomBoardItem) => void;
     isHighlighted: boolean;
 }) {
     if (!room) return <div className="w-full aspect-square" />;
@@ -61,7 +70,7 @@ function RoomCell({
                                 : 'bg-red-50 border border-red-200 text-red-700'
             )}
         >
-            <span className="font-bold text-xs">{room.id}</span>
+            <span className="font-bold text-xs">{room.display_code || room.id}</span>
             <div className="flex gap-0.5">
                 {room.eng_status !== 'n_a' && <div className={cn('w-1.5 h-1.5 rounded-full', getEngColor(room.eng_status))} />}
                 {room.clean_status !== 'n_a' && <div className={cn('w-1.5 h-1.5 rounded-full', getCleanColor(room.clean_status))} />}
@@ -73,13 +82,18 @@ function RoomCell({
     );
 }
 
-function RoomDetail({ room, onClose }: { room: Room; onClose: () => void }) {
+function RoomDetail({ room, onClose }: { room: RoomBoardItem; onClose: () => void }) {
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
             <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
             <div className="glass-card p-6 max-w-sm w-full relative z-10 animate-fade-in" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-xl font-bold text-slate-800">{room.id}</h3>
+                    <div>
+                        <h3 className="text-xl font-bold text-slate-800">{room.display_code || room.id}</h3>
+                        {room.room_scope === 'archived' && (
+                            <p className="text-xs text-slate-400 mt-1">歷史週期 · 物理房 {room.id}</p>
+                        )}
+                    </div>
                     <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-lg">&times;</button>
                 </div>
 
@@ -137,6 +151,11 @@ function RoomDetail({ room, onClose }: { room: Room; onClose: () => void }) {
                             最後更新：{room.last_updated_by}
                         </p>
                     )}
+                    {room.room_scope === 'archived' && room.check_out_at && (
+                        <p className="text-[10px] text-slate-400 text-right">
+                            退場時間：{new Date(room.check_out_at).toLocaleString('zh-HK')}
+                        </p>
+                    )}
                 </div>
             </div>
         </div>
@@ -145,10 +164,11 @@ function RoomDetail({ room, onClose }: { room: Room; onClose: () => void }) {
 
 function RoomsPageContent() {
     const searchParams = useSearchParams();
-    const [rooms, setRooms] = useState<Room[]>([]);
+    const [rooms, setRooms] = useState<RoomBoardItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<FilterMode>('all');
-    const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+    const [scope, setScope] = useState<RoomScopeFilter>('active');
+    const [selectedRoom, setSelectedRoom] = useState<RoomBoardItem | null>(null);
     const [error, setError] = useState<string | null>(null);
     const autoOpenedHighlightRef = useRef<string | null>(null);
 
@@ -166,7 +186,7 @@ function RoomsPageContent() {
 
     const fetchRooms = useCallback(async () => {
         try {
-            const res = await fetch('/api/rooms');
+            const res = await fetch(`/api/rooms?scope=${scope}`);
             if (!res.ok) throw new Error('載入失敗');
             setRooms(await res.json());
             setError(null);
@@ -175,7 +195,7 @@ function RoomsPageContent() {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [scope]);
 
     useEffect(() => { fetchRooms(); }, [fetchRooms]);
 
@@ -229,7 +249,26 @@ function RoomsPageContent() {
             <div className="flex items-center justify-between flex-wrap gap-4">
                 <div>
                     <h1 className="page-title">房間看板</h1>
-                    <p className="text-sm text-slate-500 mt-1">全棟 {rooms.length} 個單位即時狀態總覽</p>
+                    <p className="text-sm text-slate-500 mt-1">{scope === 'active' ? 'Current' : 'Archived'} 視圖 · 共 {rooms.length} 個項目</p>
+                </div>
+                <div className="flex items-center gap-2">
+                    {([
+                        { key: 'active' as RoomScopeFilter, label: 'Current' },
+                        { key: 'archived' as RoomScopeFilter, label: 'Archived' },
+                    ]).map(item => (
+                        <button
+                            key={item.key}
+                            onClick={() => setScope(item.key)}
+                            className={cn(
+                                'px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
+                                scope === item.key
+                                    ? 'bg-blue-100 text-blue-700 shadow-sm'
+                                    : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+                            )}
+                        >
+                            {item.label}
+                        </button>
+                    ))}
                 </div>
             </div>
 
@@ -307,43 +346,68 @@ function RoomsPageContent() {
                 <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-50 border border-amber-300 rounded" /> 需跟進</span>
             </div>
 
-            <div className="glass-card p-4 overflow-x-auto">
-                <table className="w-full border-collapse">
-                    <thead>
-                        <tr>
-                            <th className="text-[10px] text-slate-400 font-medium p-1 text-left w-10">樓層</th>
-                            {UNITS.map(u => (
-                                <th key={u} className="text-[10px] text-slate-400 font-medium p-1 text-center">{u}</th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {FLOORS.map(floor => (
-                            <tr key={floor}>
-                                <td className="text-[10px] text-slate-500 font-semibold p-1 text-left">{floor}F</td>
-                                {UNITS.map(unit => {
-                                    const id = `${floor}${unit}`;
-                                    const room = roomMap.get(id);
-                                    const visible = filter === 'all' || filteredRoomIds.has(id);
-                                    return (
-                                        <td key={unit} className="p-0.5">
-                                            {visible ? (
-                                                <RoomCell
-                                                    room={room}
-                                                    onClick={setSelectedRoom}
-                                                    isHighlighted={highlightSet.has(id)}
-                                                />
-                                            ) : (
-                                                <div className="w-full aspect-square rounded-lg bg-slate-50 opacity-20" />
-                                            )}
-                                        </td>
-                                    );
-                                })}
+            {scope === 'active' ? (
+                <div className="glass-card p-4 overflow-x-auto">
+                    <table className="w-full border-collapse">
+                        <thead>
+                            <tr>
+                                <th className="text-[10px] text-slate-400 font-medium p-1 text-left w-10">樓層</th>
+                                {UNITS.map(u => (
+                                    <th key={u} className="text-[10px] text-slate-400 font-medium p-1 text-center">{u}</th>
+                                ))}
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
+                        </thead>
+                        <tbody>
+                            {FLOORS.map(floor => (
+                                <tr key={floor}>
+                                    <td className="text-[10px] text-slate-500 font-semibold p-1 text-left">{floor}F</td>
+                                    {UNITS.map(unit => {
+                                        const id = `${floor}${unit}`;
+                                        const room = roomMap.get(id);
+                                        const visible = filter === 'all' || filteredRoomIds.has(id);
+                                        return (
+                                            <td key={unit} className="p-0.5">
+                                                {visible ? (
+                                                    <RoomCell
+                                                        room={room}
+                                                        onClick={setSelectedRoom}
+                                                        isHighlighted={highlightSet.has(id)}
+                                                    />
+                                                ) : (
+                                                    <div className="w-full aspect-square rounded-lg bg-slate-50 opacity-20" />
+                                                )}
+                                            </td>
+                                        );
+                                    })}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            ) : (
+                <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                    {rooms.map(room => (
+                        <button
+                            key={room.room_cycle_id || room.display_code || room.id}
+                            onClick={() => setSelectedRoom(room)}
+                            className="glass-card p-4 text-left hover:shadow-lg transition-shadow"
+                        >
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-800">{room.display_code || room.id}</p>
+                                    <p className="text-xs text-slate-400 mt-1">物理房 {room.id}</p>
+                                </div>
+                                <span className="status-badge bg-slate-100 text-slate-600">Archived</span>
+                            </div>
+                            <div className="mt-3 text-xs text-slate-500 space-y-1">
+                                <p>退場：{room.check_out_at ? new Date(room.check_out_at).toLocaleDateString('zh-HK') : '未記錄'}</p>
+                                <p>租客：{room.tenant_name || '未記錄'}</p>
+                                <p>狀態：{STATUS_LABELS[room.lease_status] || room.lease_status}</p>
+                            </div>
+                        </button>
+                    ))}
+                </div>
+            )}
 
             {selectedRoom && (
                 <RoomDetail room={selectedRoom} onClose={() => setSelectedRoom(null)} />

@@ -36,6 +36,36 @@ interface Followup {
     source_id: string;
 }
 
+interface BatchRunSummary {
+    id: string;
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    actionable_count: number;
+    context_count: number;
+    irrelevant_count: number;
+    review_count: number;
+    summary_digest: string | null;
+    created_at: string;
+    upload_batch: {
+        id: string;
+        chat_name: string;
+        source_file_name: string;
+        total_messages: number;
+    } | null;
+    event_count: number;
+}
+
+interface BatchRunDetail extends BatchRunSummary {
+    events: Array<{
+        id: string;
+        event_type: string;
+        title: string;
+        description: string;
+        room_display_codes: string[];
+        evidence_message_ids: string[];
+        confidence: number;
+    }>;
+}
+
 const PRIORITY_CONFIG: Record<SuggestionPriority, { label: string; color: string; bg: string; border: string; icon: typeof AlertTriangle }> = {
     urgent: { label: '緊急', color: 'text-red-700', bg: 'bg-red-100', border: 'border-l-red-500', icon: AlertTriangle },
     warning: { label: '注意', color: 'text-amber-700', bg: 'bg-amber-100', border: 'border-l-amber-500', icon: AlertCircle },
@@ -80,6 +110,9 @@ type FilterType = 'all' | SuggestionPriority;
 export default function AIPage() {
     const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
     const [followups, setFollowups] = useState<Followup[]>([]);
+    const [batchRuns, setBatchRuns] = useState<BatchRunSummary[]>([]);
+    const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+    const [selectedRun, setSelectedRun] = useState<BatchRunDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<FilterType>('all');
     const [refreshing, setRefreshing] = useState(false);
@@ -88,25 +121,47 @@ export default function AIPage() {
 
     const fetchData = useCallback(async () => {
         try {
-            const [sugRes, fuRes] = await Promise.all([
+            const [sugRes, fuRes, batchRes] = await Promise.all([
                 fetch('/api/suggestions'),
                 fetch('/api/followups'),
+                fetch('/api/ai-batches'),
             ]);
             if (!sugRes.ok) throw new Error('載入建議失敗');
             if (!fuRes.ok) throw new Error('載入跟進事項失敗');
+            if (!batchRes.ok) throw new Error('載入 AI 批次分析失敗');
             setSuggestions(await sugRes.json());
             setFollowups(await fuRes.json());
+            const runs = await batchRes.json();
+            setBatchRuns(runs);
+            const runId = selectedRunId || runs[0]?.id || null;
+            if (!selectedRunId && runId) {
+                setSelectedRunId(runId);
+            }
+            if (runId) {
+                const detailRes = await fetch(`/api/ai-batches/${runId}`);
+                if (detailRes.ok) {
+                    setSelectedRun(await detailRes.json());
+                }
+            }
         } catch (e: unknown) {
             showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [showToast]);
+    }, [selectedRunId, showToast]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
     usePolling(fetchData, 5000);
+
+    useEffect(() => {
+        if (!selectedRunId) {
+            setSelectedRun(null);
+            return;
+        }
+        void fetchData();
+    }, [fetchData, selectedRunId]);
 
     const handleRefresh = () => {
         setRefreshing(true);
@@ -154,6 +209,7 @@ export default function AIPage() {
     const warningCount = suggestions.filter(s => s.priority === 'warning').length;
     const infoCount = suggestions.filter(s => s.priority === 'info').length;
     const affectedRooms = new Set(suggestions.flatMap(s => s.affected_rooms));
+    const latestRun = batchRuns[0] ?? null;
 
     if (loading) {
         return (
@@ -169,7 +225,7 @@ export default function AIPage() {
             <div className="flex items-start justify-between">
                 <div>
                     <h1 className="page-title">AI 管理建議</h1>
-                    <p className="text-sm text-slate-500 mt-1">系統自動分析數據，提供管理優先事項和行動建議</p>
+                    <p className="text-sm text-slate-500 mt-1">上半部顯示全檔對話 AI 分析，下半部保留管理建議與跟進入口</p>
                 </div>
                 <button
                     onClick={handleRefresh}
@@ -179,6 +235,101 @@ export default function AIPage() {
                     <RefreshCw size={14} className={cn(refreshing && 'animate-spin')} />
                     刷新
                 </button>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {[
+                    { label: '最近批次', value: batchRuns.length, color: 'text-slate-700', bg: 'bg-white' },
+                    { label: '可操作事件', value: latestRun?.actionable_count ?? 0, color: 'text-emerald-700', bg: 'bg-emerald-50' },
+                    { label: '無關聊天', value: latestRun?.irrelevant_count ?? 0, color: 'text-slate-700', bg: 'bg-slate-50' },
+                    { label: '需覆核', value: latestRun?.review_count ?? 0, color: 'text-amber-700', bg: 'bg-amber-50' },
+                ].map(stat => (
+                    <div key={stat.label} className={cn('glass-card p-4', stat.bg)}>
+                        <p className="text-xs text-slate-500">{stat.label}</p>
+                        <p className={cn('text-2xl font-bold mt-1', stat.color)}>{stat.value}</p>
+                    </div>
+                ))}
+            </div>
+
+            <div className="scan-shell">
+                <div className="scan-grid">
+                    {batchRuns.length === 0 ? (
+                        <div className="glass-card p-5">
+                            <p className="text-sm text-slate-500">暫時未有全檔 AI 分析記錄。</p>
+                        </div>
+                    ) : batchRuns.map(run => (
+                        <button
+                            key={run.id}
+                            onClick={() => setSelectedRunId(run.id)}
+                            className={cn(
+                                'scan-tile text-left',
+                                selectedRunId === run.id && 'ring-2 ring-blue-500 ring-offset-2'
+                            )}
+                        >
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm font-semibold text-slate-800">{run.upload_batch?.chat_name || '未命名 upload'}</span>
+                                <span className={cn(
+                                    'status-badge',
+                                    run.status === 'completed'
+                                        ? 'bg-emerald-100 text-emerald-700'
+                                        : run.status === 'failed'
+                                            ? 'bg-red-100 text-red-700'
+                                            : 'bg-blue-100 text-blue-700'
+                                )}>
+                                    {run.status}
+                                </span>
+                            </div>
+                            <p className="mt-2 text-xs text-slate-500">{run.upload_batch?.source_file_name || '未記錄檔名'}</p>
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-500">
+                                <span>有用 {run.actionable_count}</span>
+                                <span>覆核 {run.review_count}</span>
+                                <span>無關 {run.irrelevant_count}</span>
+                                <span>事件 {run.event_count}</span>
+                            </div>
+                        </button>
+                    ))}
+                </div>
+
+                <div className="scan-detail">
+                    {selectedRun ? (
+                        <div className="space-y-4">
+                            <div>
+                                <h2 className="section-title">全檔對話摘要</h2>
+                                <p className="text-xs text-slate-400 mt-1">
+                                    {selectedRun.upload_batch?.chat_name || '未命名 upload'} · {selectedRun.upload_batch?.total_messages || 0} 則訊息
+                                </p>
+                            </div>
+                            <div className="glass-card p-4">
+                                <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">
+                                    {selectedRun.summary_digest || 'AI 尚未輸出摘要。'}
+                                </p>
+                            </div>
+                            <div className="space-y-3">
+                                <h3 className="text-sm font-semibold text-slate-700">事件候選</h3>
+                                {selectedRun.events.length === 0 ? (
+                                    <div className="glass-card p-4 text-sm text-slate-500">此批次暫時未有事件候選。</div>
+                                ) : selectedRun.events.map(event => (
+                                    <div key={event.id} className="glass-card p-4">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="status-badge bg-slate-100 text-slate-600">{event.event_type}</span>
+                                            {event.room_display_codes.map(code => (
+                                                <span key={code} className="status-badge bg-blue-100 text-blue-700">{code}</span>
+                                            ))}
+                                            <span className="text-[11px] text-slate-400">信心 {Math.round(event.confidence * 100)}%</span>
+                                        </div>
+                                        <p className="mt-2 text-sm font-medium text-slate-800">{event.title}</p>
+                                        <p className="mt-1 text-xs text-slate-500 leading-relaxed">{event.description}</p>
+                                        <p className="mt-2 text-[11px] text-slate-400">
+                                            Evidence: {event.evidence_message_ids.join(', ')}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="glass-card p-5 text-sm text-slate-500">選擇左邊一個 upload 分析結果。</div>
+                    )}
+                </div>
             </div>
 
             {/* Stats */}

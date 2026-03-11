@@ -1,6 +1,7 @@
-import { ParseResult } from './types';
+import { ParseResult, RoomReference } from './types';
 import { HandoffPolicy } from './policy/types';
 import { DEFAULT_HANDOFF_POLICY } from './policy/defaults';
+import { extractRoomReferences } from './room-lifecycle';
 
 export const ROOM_REGEX = /\b(\d{1,2}[A-Ma-m])\b/g;
 
@@ -35,18 +36,11 @@ function buildSafetyExplanation(result: ParseResult, analysis: HandoffSignalAnal
 }
 
 export function extractRooms(rawText: string): string[] {
-    const rooms: string[] = [];
-    const matches = Array.from(rawText.matchAll(ROOM_REGEX));
+    return extractRoomReferences(rawText).map(ref => ref.physical_room_id);
+}
 
-    for (const match of matches) {
-        const room = match[1].toUpperCase();
-        const floor = Number(room.slice(0, -1));
-        if (floor >= 1 && floor <= 32 && !rooms.includes(room)) {
-            rooms.push(room);
-        }
-    }
-
-    return rooms;
+export function extractRoomRefs(rawText: string): RoomReference[] {
+    return extractRoomReferences(rawText);
 }
 
 export function analyzeHandoffSignal(rawText: string, policy?: HandoffPolicy): HandoffSignalAnalysis {
@@ -96,6 +90,7 @@ export function enforceHandoffSafety(rawText: string, result: ParseResult, fallb
 
     return {
         rooms: result.rooms.length > 0 ? result.rooms : safeFallback?.rooms ?? [],
+        room_refs: result.room_refs ?? safeFallback?.room_refs,
         action: safeFallback?.action ?? '工程進度更新',
         type: safeFallback?.type ?? 'update',
         from_dept: safeFallback?.from_dept ?? result.from_dept,

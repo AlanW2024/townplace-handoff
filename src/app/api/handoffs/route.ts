@@ -3,6 +3,14 @@ import { getStore, withStoreWrite } from '@/lib/store';
 import { createAuditLog } from '@/lib/audit';
 import { AuditFieldChange, HandoffStatus } from '@/lib/types';
 import { parseJsonBody } from '@/lib/api-utils';
+import { canApproveHandoff } from '@/lib/permissions';
+import {
+    assertAllowed,
+    assertExpectedVersion,
+    getRouteErrorStatus,
+    requireAuthenticatedUser,
+    resolveReason,
+} from '@/lib/route-mutations';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +41,7 @@ export async function PUT(request: Request) {
     const { id, status, actor, reason, expectedVersion } = parsed.data;
 
     const actorName = typeof actor === 'string' ? actor.trim() : '';
-    const actionReason = typeof reason === 'string' ? reason.trim() : '';
+    const actionReason = resolveReason(reason);
 
     if (!actorName) {
         return NextResponse.json({ error: '請填寫操作人' }, { status: 400 });
@@ -47,6 +55,9 @@ export async function PUT(request: Request) {
         return NextResponse.json({ error: 'Invalid handoff status' }, { status: 400 });
     }
 
+    const auth = await requireAuthenticatedUser(request);
+    if ('error' in auth) return auth.error;
+
     try {
         const updated = await withStoreWrite(store => {
             const idx = store.handoffs.findIndex(h => h.id === id);
@@ -55,10 +66,9 @@ export async function PUT(request: Request) {
             }
 
             const current = store.handoffs[idx];
+            assertAllowed(canApproveHandoff(auth.user, current.to_dept));
 
-            if (expectedVersion !== undefined && expectedVersion !== current.version) {
-                throw new Error('版本衝突：此交接已被其他人修改，請重新載入');
-            }
+            assertExpectedVersion(expectedVersion, current.version, '交接');
 
             const allowedTransitions = HANDOFF_TRANSITIONS[current.status];
             if (!allowedTransitions.includes(status)) {
@@ -84,6 +94,7 @@ export async function PUT(request: Request) {
                 entity_id: current.id,
                 action: 'status_changed',
                 actor: actorName,
+                actor_id: auth.user.id,
                 reason: actionReason,
                 from_status: fromStatus,
                 to_status: status,
@@ -96,7 +107,7 @@ export async function PUT(request: Request) {
         return NextResponse.json(updated);
     } catch (error) {
         const message = error instanceof Error ? error.message : '更新交接失敗';
-        const statusCode = message === 'Handoff not found' ? 404 : message.includes('版本衝突') ? 409 : 400;
+        const statusCode = getRouteErrorStatus(error, 'Handoff not found');
         return NextResponse.json({ error: message }, { status: statusCode });
     }
 }

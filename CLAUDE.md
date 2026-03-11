@@ -12,7 +12,7 @@ TOWNPLACE SOHO 物業管理系統 — 管理工程部、清潔部、禮賓部之
 npm run dev           # Start dev server (Next.js)
 npm run build         # Production build — use to verify zero errors
 npm run lint          # ESLint
-npm run test          # Vitest — 235 tests across 15 files
+npm run test          # Vitest — 245 tests across 19 files
 npm run test:coverage # Vitest with v8 coverage report
 ```
 
@@ -23,7 +23,7 @@ npm run test:coverage # Vitest with v8 coverage report
 - **Tailwind CSS** for styling
 - **File-based JSON store** (`.demo-store.json`) — no database
 - **Cookie auth** (`tp-auth=authenticated`) via `src/middleware.ts` → `isAuthenticated()` from `auth.ts`
-- **Vitest** for testing (235 tests)
+- **Vitest** for testing (245 tests)
 
 ### Data Flow
 ```
@@ -100,7 +100,7 @@ All routes use `withStoreWrite()` for mutations and `parseJsonBody()` for safe J
 
 ## Test Coverage
 
-### Covered (235 tests across 15 files)
+### Covered (245 tests across 19 files)
 - `tests/parser.test.ts` (34) — message parsing + dept mapping + word boundary regression
 - `tests/message-parsing.test.ts` (27) — room extraction + handoff signals + safety gates
 - `tests/ingest.test.ts` (36) — room status updates + summary detection + integration

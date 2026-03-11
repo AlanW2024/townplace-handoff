@@ -15,14 +15,27 @@ export type DocStatus = 'not_started' | 'preparing' | 'pending_sign' | 'with_ten
 export type BookingType = 'viewing' | 'shooting' | 'event' | 'tenant_booking';
 export type FollowupStatus = 'open' | 'in_progress' | 'done' | 'dismissed';
 export type FollowupSourceType = 'suggestion' | 'manual';
-export type ParseEngine = 'rules' | 'anthropic' | 'openai' | 'review';
-export type AuditEntityType = 'document' | 'followup' | 'handoff';
+export type ParseEngine = 'rules' | 'anthropic' | 'openai' | 'openrouter' | 'review';
+export type AuditEntityType = 'document' | 'followup' | 'handoff' | 'room';
 export type AuditAction = 'created' | 'status_advanced' | 'status_reverted' | 'status_changed' | 'field_updated';
+export type RoomScope = 'active' | 'archived';
+export type RoomCycleStatus = 'active' | 'archived';
+export type UploadBatchStatus = 'uploaded' | 'analyzing' | 'completed' | 'failed';
+export type AiBatchStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type AiMessageClassification = 'actionable' | 'context' | 'irrelevant' | 'review';
+export type AiExtractedEventType = 'operational_event' | 'room_progress_update' | 'followup_candidate' | 'review_candidate';
 
 export interface AuditFieldChange {
     field: string;
     from: string | null;
     to: string | null;
+}
+
+export interface RoomReference {
+    physical_room_id: string;
+    display_code: string;
+    scope: RoomScope;
+    raw_match: string;
 }
 
 export interface Room {
@@ -45,6 +58,22 @@ export interface Room {
     version: number;
 }
 
+export interface RoomCycle {
+    id: string;
+    property_id: string;
+    room_id: string;
+    display_code: string;
+    scope: RoomScope;
+    lifecycle_status: RoomCycleStatus;
+    tenant_name: string | null;
+    check_in_at: string | null;
+    check_out_at: string | null;
+    archived_from_code: string | null;
+    migrated: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
 export interface Message {
     id: string;
     property_id: string;
@@ -56,12 +85,16 @@ export interface Message {
     chat_type: ChatType;
     sent_at: string;
     parsed_room: string[];
+    parsed_room_refs?: RoomReference[];
     parsed_action: string | null;
     parsed_type: HandoffType | null;
     confidence: number;
     parsed_explanation: string | null;
     parsed_by: ParseEngine;
     parsed_model: string | null;
+    upload_batch_id?: string | null;
+    ai_classification?: AiMessageClassification | null;
+    ai_classification_reason?: string | null;
     created_at: string;
 }
 
@@ -69,6 +102,7 @@ export interface Handoff {
     id: string;
     property_id: string;
     room_id: string;
+    room_cycle_id?: string | null;
     from_dept: DeptCode;
     to_dept: DeptCode;
     action: string;
@@ -83,6 +117,7 @@ export interface Document {
     id: string;
     property_id: string;
     room_id: string;
+    room_cycle_id?: string | null;
     doc_type: DocType;
     status: DocStatus;
     current_holder: string | null;
@@ -96,6 +131,7 @@ export interface Booking {
     id: string;
     property_id: string;
     room_id: string | null;
+    room_cycle_id?: string | null;
     facility: string | null;
     booking_type: BookingType;
     scheduled_at: string;
@@ -117,6 +153,7 @@ export interface Followup {
     assigned_dept: DeptCode;
     assigned_to: string | null;
     related_rooms: string[];
+    related_room_cycles?: string[];
     status: FollowupStatus;
     due_at: string | null;
     created_at: string;
@@ -150,6 +187,7 @@ export interface ParseReview {
     sender_dept: DeptCode;
     confidence: number;
     suggested_rooms: string[];
+    room_cycle_ids?: string[];
     suggested_action: string | null;
     suggested_type: HandoffType | null;
     suggested_from_dept: DeptCode | null;
@@ -169,6 +207,7 @@ export interface ParseReview {
 
 export interface ParseResult {
     rooms: string[];
+    room_refs?: RoomReference[];
     action: string | null;
     type: HandoffType | null;
     from_dept: DeptCode | null;
@@ -177,6 +216,61 @@ export interface ParseResult {
     explanation?: string | null;
     engine?: ParseEngine;
     model?: string | null;
+}
+
+export interface UploadBatch {
+    id: string;
+    property_id: string;
+    source_file_name: string;
+    chat_name: string;
+    chat_type: ChatType;
+    total_lines: number;
+    parsed_messages: number;
+    total_messages: number;
+    status: UploadBatchStatus;
+    ai_batch_run_id: string | null;
+    summary_digest: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface AiBatchRun {
+    id: string;
+    property_id: string;
+    upload_batch_id: string;
+    status: AiBatchStatus;
+    provider: ParseEngine | 'fallback';
+    model: string | null;
+    total_chunks: number;
+    completed_chunks: number;
+    actionable_count: number;
+    context_count: number;
+    irrelevant_count: number;
+    review_count: number;
+    summary_digest: string | null;
+    error: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface AiExtractedEvent {
+    id: string;
+    property_id: string;
+    upload_batch_id: string;
+    ai_batch_run_id: string;
+    event_type: AiExtractedEventType;
+    title: string;
+    description: string;
+    room_ids: string[];
+    room_cycle_ids: string[];
+    room_display_codes: string[];
+    confidence: number;
+    evidence_message_ids: string[];
+    status: 'candidate' | 'applied';
+    created_at: string;
+    updated_at: string;
 }
 
 // ===========================
@@ -190,7 +284,10 @@ export type PermissionAction =
     | 'handoff:approve'
     | 'document:edit'
     | 'document:advance'
+    | 'followup:edit'
     | 'followup:close'
+    | 'booking:create'
+    | 'message:ingest'
     | 'review:approve';
 
 export interface Property {

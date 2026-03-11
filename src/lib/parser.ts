@@ -1,5 +1,5 @@
 import { DeptCode, HandoffType, ParseResult } from './types';
-import { analyzeHandoffSignal, extractRooms } from './message-parsing';
+import { analyzeHandoffSignal, extractRoomRefs, extractRooms } from './message-parsing';
 import { ActionPatternConfig } from './policy/types';
 import { DEFAULT_ACTION_PATTERNS, DEFAULT_STAFF_DIRECTORY } from './policy/defaults';
 
@@ -44,6 +44,7 @@ export function parseWhatsAppMessage(
 
     // 1. Extract room numbers
     const rooms = extractRooms(rawText);
+    const roomRefs = extractRoomRefs(rawText);
 
     // 2. Determine sender department
     let fromDept: DeptCode | null = senderDept || null;
@@ -68,6 +69,7 @@ export function parseWhatsAppMessage(
     if (rooms.length > 0 && hasQueryWords && !hasDamageWords && /維修|工程|執修/.test(normalizedText)) {
         return {
             rooms,
+            room_refs: roomRefs,
             action: '查詢進度',
             type: 'query',
             from_dept: fromDept,
@@ -87,6 +89,7 @@ export function parseWhatsAppMessage(
     if (rooms.length > 0 && handoffSignal.hasExplicitPositiveHandoff && !handoffSignal.allowsImmediateHandoff) {
         return {
             rooms,
+            room_refs: roomRefs,
             action: '工程進度更新',
             type: 'update',
             from_dept: fromDept || (isEngineeringContext ? 'eng' : null),
@@ -101,6 +104,7 @@ export function parseWhatsAppMessage(
         if (hasContinuationWords || (!hasScopeDetails && !hasProgressWorkWords)) {
             return {
                 rooms,
+                room_refs: roomRefs,
                 action: '工程進度更新',
                 type: 'update',
                 from_dept: fromDept || 'eng',
@@ -111,6 +115,7 @@ export function parseWhatsAppMessage(
 
         return {
             rooms,
+            room_refs: roomRefs,
             action: '部分工程完成',
             type: 'update',
             from_dept: fromDept || 'eng',
@@ -144,6 +149,7 @@ export function parseWhatsAppMessage(
         if (rooms.length > 0 && fromDept === 'eng' && COMPLETION_REGEX.test(normalizedText) && !hasExplicitHandoff) {
             return {
                 rooms,
+                room_refs: roomRefs,
                 action: '工程進度更新',
                 type: 'update',
                 from_dept: 'eng',
@@ -154,6 +160,7 @@ export function parseWhatsAppMessage(
 
         return {
             rooms,
+            room_refs: roomRefs,
             action: null,
             type: null,
             from_dept: fromDept,
@@ -178,6 +185,7 @@ export function parseWhatsAppMessage(
 
     return {
         rooms,
+        room_refs: roomRefs,
         action: bestMatch.action,
         type: bestMatch.type,
         from_dept: finalFromDept,

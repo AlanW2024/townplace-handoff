@@ -1,7 +1,10 @@
 import AdmZip from 'adm-zip';
 import { NextResponse } from 'next/server';
 import { ingestMessagesBatch } from '@/lib/ingest';
-import { Message, ChatType } from '@/lib/types';
+import { Message, ChatType, UploadBatch, AiBatchRun } from '@/lib/types';
+import { withStoreWrite } from '@/lib/store';
+import { generateId } from '@/lib/utils';
+import { queueAiBatchAnalysis } from '@/lib/ai/batch-analyze';
 
 export const dynamic = 'force-dynamic';
 
@@ -138,6 +141,8 @@ export async function POST(request: Request) {
     const entriesToIngest: Parameters<typeof ingestMessagesBatch>[0] = [];
     let parsedCount = 0;
     let pendingMessage: ParsedHeader | null = null;
+    const uploadBatchId = `upload-${generateId()}`;
+    const aiBatchRunId = `airun-${generateId()}`;
 
     const flushPendingMessage = () => {
         if (!pendingMessage) return;
@@ -159,6 +164,7 @@ export async function POST(request: Request) {
                 chat_name: chatName,
                 chat_type: chatType,
                 wa_group: chatName,
+                upload_batch_id: uploadBatchId,
             });
             parsedCount++;
         }
@@ -187,14 +193,66 @@ export async function POST(request: Request) {
 
     flushPendingMessage();
 
-    const results = await ingestMessagesBatch(entriesToIngest);
+    // Bulk uploads first preserve every raw message, then kick off full-conversation AI analysis.
+    const results = await ingestMessagesBatch(entriesToIngest, {
+        strategy: 'rules_only',
+        reviewMode: 'bulk_upload',
+        suppressSideEffects: true,
+        suppressReviews: true,
+        defaultClassification: 'context',
+    });
     const newMessages: Message[] = results.map(result => result.message);
-    const handoffCount = results.reduce((total, result) => total + result.handoffs.length, 0);
+    const now = new Date().toISOString();
+
+    await withStoreWrite(store => {
+        const uploadBatch: UploadBatch = {
+            id: uploadBatchId,
+            property_id: 'tp-soho',
+            source_file_name: file.name,
+            chat_name: chatName,
+            chat_type: chatType,
+            total_lines: lines.length,
+            parsed_messages: parsedCount,
+            total_messages: newMessages.length,
+            status: 'uploaded',
+            ai_batch_run_id: aiBatchRunId,
+            summary_digest: null,
+            created_at: now,
+            updated_at: now,
+        };
+        const run: AiBatchRun = {
+            id: aiBatchRunId,
+            property_id: 'tp-soho',
+            upload_batch_id: uploadBatchId,
+            status: 'queued',
+            provider: 'fallback',
+            model: null,
+            total_chunks: 0,
+            completed_chunks: 0,
+            actionable_count: 0,
+            context_count: 0,
+            irrelevant_count: 0,
+            review_count: 0,
+            summary_digest: null,
+            error: null,
+            started_at: null,
+            completed_at: null,
+            created_at: now,
+            updated_at: now,
+        };
+
+        store.upload_batches.push(uploadBatch);
+        store.ai_batch_runs.push(run);
+    });
+
+    queueAiBatchAnalysis(aiBatchRunId);
 
     return NextResponse.json({
+        upload_batch_id: uploadBatchId,
+        ai_batch_run_id: aiBatchRunId,
         total_lines: lines.length,
         parsed_messages: parsedCount,
-        handoffs_created: handoffCount,
+        handoffs_created: 0,
         chat_name: chatName,
         chat_type: chatType,
         messages: newMessages,

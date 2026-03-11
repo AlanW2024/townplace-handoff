@@ -7,6 +7,10 @@ export function usePolling(callback: () => void, intervalMs: number) {
     callbackRef.current = callback;
 
     useEffect(() => {
+        if (intervalMs <= 0) {
+            return;
+        }
+
         let timer: ReturnType<typeof setInterval> | null = null;
 
         function start() {

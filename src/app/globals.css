@@ -95,4 +95,54 @@ body {
     @apply px-3 py-1.5 text-slate-500 rounded-lg text-sm font-medium
     hover:bg-slate-100 hover:text-slate-700 active:scale-[0.98] transition-all duration-200;
   }
+  .scan-shell {
+    @apply grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.95fr)] items-start;
+  }
+  .scan-grid {
+    @apply grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-4 gap-3;
+  }
+  .scan-tile {
+    @apply glass-card-hover aspect-square min-h-[210px] p-4 text-left flex flex-col justify-between overflow-hidden;
+  }
+  .scan-tile-active {
+    @apply border-blue-300 ring-2 ring-blue-500/15 shadow-md;
+  }
+  .scan-kicker {
+    @apply text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400;
+  }
+  .scan-title {
+    @apply text-sm font-semibold text-slate-800 leading-snug;
+  }
+  .scan-body {
+    @apply text-xs leading-relaxed text-slate-500;
+  }
+  .scan-detail {
+    @apply glass-card p-5 xl:sticky xl:top-6 max-h-[calc(100vh-7rem)] overflow-auto;
+  }
+  .scan-chip {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium;
+  }
+  .scan-meta {
+    @apply flex items-center gap-2 flex-wrap text-[11px] text-slate-400;
+  }
+}
+
+.scan-clamp-2,
+.scan-clamp-3,
+.scan-clamp-4 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.scan-clamp-2 {
+  -webkit-line-clamp: 2;
+}
+
+.scan-clamp-3 {
+  -webkit-line-clamp: 3;
+}
+
+.scan-clamp-4 {
+  -webkit-line-clamp: 4;
 }

@@ -18,16 +18,41 @@ export async function withTempWorkspace(run: () => Promise<void>, prefix = 'town
     }
 }
 
-export function jsonRequest(url: string, method: string, body: unknown): Request {
+export function jsonRequest(
+    url: string,
+    method: string,
+    body: unknown,
+    headers: Record<string, string> = {}
+): Request {
     return new Request(url, {
         method,
-        headers: { 'content-type': 'application/json' },
+        headers: {
+            'content-type': 'application/json',
+            cookie: 'tp-auth=authenticated',
+            ...headers,
+        },
         body: JSON.stringify(body),
     });
 }
 
 export function isoNow(offsetMs = 0): string {
     return new Date(Date.now() + offsetMs).toISOString();
+}
+
+export async function waitFor(
+    predicate: () => boolean,
+    options?: { timeoutMs?: number; intervalMs?: number }
+) {
+    const timeoutMs = options?.timeoutMs ?? 1500;
+    const intervalMs = options?.intervalMs ?? 25;
+    const started = Date.now();
+
+    while (Date.now() - started < timeoutMs) {
+        if (predicate()) return;
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+
+    throw new Error(`waitFor timeout after ${timeoutMs}ms`);
 }
 
 export function makeRoom(id: string, overrides: Record<string, unknown> = {}) {

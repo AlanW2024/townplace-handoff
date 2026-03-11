@@ -1,11 +1,21 @@
-import { Message, Handoff, ParseReview, DeptCode, ChatType } from './types';
-import { parseMessageWithAI } from './ai/parse-message';
+import {
+    Message,
+    Handoff,
+    ParseReview,
+    DeptCode,
+    ChatType,
+    ParseResult,
+    AiMessageClassification,
+    RoomReference,
+} from './types';
+import { parseMessageWithAI, ParseStrategy } from './ai/parse-message';
 import { getDeptFromSender } from './parser';
 import { analyzeHandoffSignal, enforceHandoffSafety, HandoffSignalAnalysis } from './message-parsing';
 import { StoreData, withStoreWrite } from './store';
 import { ReviewPolicy, RoomStatusRule } from './policy/types';
 import { DEFAULT_REVIEW_POLICY } from './policy/defaults';
 import { emitEvent } from './observability';
+import { ensureRoomCycleForReference } from './room-lifecycle';
 
 // ===========================
 // Shared message ingestion logic
@@ -21,12 +31,34 @@ interface IngestInput {
     chat_type?: ChatType;
     sent_at?: string;       // ISO string; defaults to now
     id_prefix?: string;     // e.g. "msg" or "msg-upload"
+    upload_batch_id?: string | null;
 }
 
 export interface IngestResult {
     message: Message;
     handoffs: Handoff[];
     review: ParseReview | null;
+}
+
+export interface ParsePreviewResult {
+    senderDept: DeptCode | null;
+    parsed: ParseResult;
+    safeParsed: ParseResult;
+    handoffSignal: HandoffSignalAnalysis;
+    signals: {
+        isSummary: boolean;
+        isAmbiguousCompletion: boolean;
+        hasFutureHandoffLanguage: boolean;
+    };
+    needsReview: boolean;
+}
+
+interface PreviewOptions {
+    strategy?: ParseStrategy;
+    reviewMode?: 'default' | 'bulk_upload';
+    suppressSideEffects?: boolean;
+    suppressReviews?: boolean;
+    defaultClassification?: AiMessageClassification | null;
 }
 
 let ingestCounter = 0;
@@ -81,22 +113,89 @@ export function isAmbiguousEngineeringCompletion(
     return parsed.action === '工程進度更新' && parsed.confidence < 0.75;
 }
 
-async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Promise<IngestResult> {
-    ingestCounter++;
-
-    // 1. Determine sender department
+export async function previewMessageParsing(
+    input: Pick<IngestInput, 'raw_text' | 'sender_name' | 'sender_dept' | 'wa_group' | 'chat_name'>,
+    options?: PreviewOptions
+): Promise<ParsePreviewResult> {
     const senderDept: DeptCode | null =
         input.sender_dept || getDeptFromSender(input.sender_name);
 
-    // 2. Parse message with AI-simulated parser
     const parsed = await parseMessageWithAI({
         rawText: input.raw_text,
         senderName: input.sender_name,
         senderDept: senderDept || undefined,
         chatName: input.chat_name || input.wa_group || 'SOHO 前線🏡🧹🦫🐿️',
-    });
+    }, options);
     const safeParsed = enforceHandoffSafety(input.raw_text, parsed);
     const handoffSignal = analyzeHandoffSignal(input.raw_text);
+    const isSummary = isSummaryMessage(input.raw_text, safeParsed);
+    const ambiguousCompletion = isAmbiguousEngineeringCompletion(input.raw_text, safeParsed);
+    const hasFutureHandoffLanguage = handoffSignal.hasExplicitPositiveHandoff && handoffSignal.hasFutureContext;
+    const baseNeedsReview = shouldRequireReview(safeParsed, {
+        isSummary,
+        isAmbiguousCompletion: ambiguousCompletion,
+        hasFutureHandoffLanguage,
+    });
+    const needsReview = options?.reviewMode === 'bulk_upload'
+        ? shouldQueueBulkUploadReview(baseNeedsReview, safeParsed)
+        : baseNeedsReview;
+
+    return {
+        senderDept,
+        parsed,
+        safeParsed,
+        handoffSignal,
+        signals: {
+            isSummary,
+            isAmbiguousCompletion: ambiguousCompletion,
+            hasFutureHandoffLanguage,
+        },
+        needsReview,
+    };
+}
+
+function shouldQueueBulkUploadReview(
+    baseNeedsReview: boolean,
+    parsed: { rooms: string[] }
+): boolean {
+    if (!baseNeedsReview) return false;
+
+    // Bulk imports should keep all chat history visible without flooding the review queue
+    // with room-less chatter. Ambiguous messages that still point to concrete rooms remain reviewable.
+    return parsed.rooms.length > 0;
+}
+
+function deriveInitialClassification(
+    preview: ParsePreviewResult,
+    override?: AiMessageClassification | null
+): AiMessageClassification | null {
+    if (override) return override;
+    if (preview.needsReview) return 'review';
+    if (preview.safeParsed.action && preview.safeParsed.rooms.length > 0) return 'actionable';
+    if (preview.safeParsed.action || preview.safeParsed.rooms.length > 0) return 'context';
+    return 'irrelevant';
+}
+
+function getRoomRefs(parsed: ParseResult): RoomReference[] {
+    return parsed.room_refs ?? parsed.rooms.map(room => ({
+        physical_room_id: room,
+        display_code: room,
+        scope: 'active',
+        raw_match: room,
+    }));
+}
+
+function ingestMessageIntoStore(
+    store: StoreData,
+    input: IngestInput,
+    preview: ParsePreviewResult,
+    options?: PreviewOptions
+): IngestResult {
+    ingestCounter++;
+    const senderDept = preview.senderDept;
+    const safeParsed = preview.safeParsed;
+    const handoffSignal = preview.handoffSignal;
+    const roomRefs = getRoomRefs(safeParsed);
 
     // 3. Build message object
     const now = new Date().toISOString();
@@ -116,12 +215,18 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
         chat_type: chatType,
         sent_at: sentAt,
         parsed_room: safeParsed.rooms,
+        parsed_room_refs: roomRefs,
         parsed_action: safeParsed.action,
         parsed_type: safeParsed.type,
         confidence: safeParsed.confidence,
         parsed_explanation: safeParsed.explanation || null,
         parsed_by: safeParsed.engine || 'rules',
         parsed_model: safeParsed.model || 'rule-engine',
+        upload_batch_id: input.upload_batch_id ?? null,
+        ai_classification: deriveInitialClassification(preview, options?.defaultClassification),
+        ai_classification_reason: options?.suppressSideEffects
+            ? '批量匯入階段先保留原始訊息，等待全檔 AI 分析再重新分類。'
+            : '由即時解析流程根據房號、動作和安全規則推斷。',
         created_at: now,
     };
 
@@ -129,13 +234,10 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
     store.messages.push(msg);
 
     // 5. Check if review is needed
-    const isSummary = isSummaryMessage(input.raw_text, safeParsed);
-    const ambiguousCompletion = isAmbiguousEngineeringCompletion(input.raw_text, safeParsed);
-    const hasFutureHandoffLanguage = handoffSignal.hasExplicitPositiveHandoff && handoffSignal.hasFutureContext;
-    const needsReview = shouldRequireReview(safeParsed, { isSummary, isAmbiguousCompletion: ambiguousCompletion, hasFutureHandoffLanguage });
+    const needsReview = preview.needsReview;
     let review: ParseReview | null = null;
 
-    if (needsReview) {
+    if (needsReview && !options?.suppressReviews) {
         // Create a review entry — defer side effects until approved
         review = {
             id: `rev-${Date.now()}-${ingestCounter}`,
@@ -146,6 +248,7 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
             sender_dept: senderDept || 'conc',
             confidence: safeParsed.confidence,
             suggested_rooms: safeParsed.rooms,
+            room_cycle_ids: roomRefs.map(ref => ensureRoomCycleForReference(store, ref).id),
             suggested_action: safeParsed.action,
             suggested_type: safeParsed.type,
             suggested_from_dept: safeParsed.from_dept,
@@ -168,17 +271,19 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
     // 6. Apply side effects — only if confidence is high enough
     const handoffs: Handoff[] = [];
 
-    if (!needsReview) {
+    if (!needsReview && !options?.suppressSideEffects) {
         const effectFromDept = safeParsed.from_dept || senderDept;
         const effectToDept = safeParsed.to_dept;
+        const activeRoomRefs = roomRefs.filter(ref => ref.scope === 'active');
 
         // Create handoffs for handoff-type messages
         if (safeParsed.type === 'handoff' && handoffSignal.allowsImmediateHandoff && effectFromDept && effectToDept) {
-            for (const roomId of safeParsed.rooms) {
+            for (const roomRef of activeRoomRefs) {
                 const ho: Handoff = {
-                    id: `ho-${Date.now()}-${ingestCounter}-${roomId}`,
+                    id: `ho-${Date.now()}-${ingestCounter}-${roomRef.physical_room_id}`,
                     property_id: 'tp-soho',
-                    room_id: roomId,
+                    room_id: roomRef.physical_room_id,
+                    room_cycle_id: ensureRoomCycleForReference(store, roomRef).id,
                     from_dept: effectFromDept,
                     to_dept: effectToDept,
                     action: safeParsed.action || '',
@@ -194,8 +299,8 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
         }
 
         // Update room statuses based on parsed action
-        for (const roomId of safeParsed.rooms) {
-            const room = store.rooms.find(r => r.id === roomId);
+        for (const roomRef of activeRoomRefs) {
+            const room = store.rooms.find(r => r.id === roomRef.physical_room_id);
             if (!room) continue;
 
             applyRoomStatusUpdate(room, safeParsed.action, effectFromDept || null, msg.sender_name);
@@ -214,17 +319,22 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
 }
 
 export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
-    return withStoreWrite(store => ingestMessageIntoStore(store, input));
+    const preview = await previewMessageParsing(input);
+    return withStoreWrite(store => ingestMessageIntoStore(store, input, preview));
 }
 
-export async function ingestMessagesBatch(inputs: IngestInput[]): Promise<IngestResult[]> {
-    return withStoreWrite(async store => {
-        const results: IngestResult[] = [];
-        for (const input of inputs) {
-            results.push(await ingestMessageIntoStore(store, input));
-        }
-        return results;
-    });
+export async function ingestMessagesBatch(
+    inputs: IngestInput[],
+    options?: PreviewOptions
+): Promise<IngestResult[]> {
+    const previews: ParsePreviewResult[] = [];
+    for (const input of inputs) {
+        previews.push(await previewMessageParsing(input, options));
+    }
+
+    return withStoreWrite(store =>
+        inputs.map((input, index) => ingestMessageIntoStore(store, input, previews[index], options))
+    );
 }
 
 /**

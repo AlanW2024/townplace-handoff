@@ -5,7 +5,7 @@ import { usePolling } from '@/hooks/usePolling';
 import {
     MessageSquare, ArrowRightLeft, Send, AlertTriangle, Brain, MessagesSquare, Phone, ShieldCheck
 } from 'lucide-react';
-import { Message, Handoff, DEPT_INFO, DeptCode, ChatType } from '@/lib/types';
+import { Message, Handoff, DEPT_INFO, DeptCode, ChatType, AiMessageClassification } from '@/lib/types';
 import { cn, formatTime, timeAgo } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
 
@@ -35,16 +35,25 @@ function SourceBadge({ type, name }: { type: ChatType; name: string }) {
     );
 }
 
-function ParseCard({ message }: { message: Message }) {
+function ParseCard({ message, needsReview }: { message: Message; needsReview: boolean }) {
     const deptInfo = DEPT_INFO[message.sender_dept] || DEPT_INFO.conc;
-    const needsReview = message.confidence < 0.75 || !message.parsed_action;
     const parserLabel = message.parsed_by === 'anthropic'
         ? 'Claude AI'
+        : message.parsed_by === 'openrouter'
+            ? 'OpenRouter'
         : message.parsed_by === 'openai'
             ? 'OpenAI'
             : message.parsed_by === 'review'
                 ? '人工覆核'
                 : '規則引擎';
+
+    const classification = message.ai_classification;
+    const classificationLabel: Record<AiMessageClassification, string> = {
+        actionable: '有用',
+        context: '背景',
+        irrelevant: '無關',
+        review: '覆核',
+    };
 
     return (
         <div className="glass-card p-4 animate-fade-in">
@@ -81,6 +90,8 @@ function ParseCard({ message }: { message: Message }) {
                                     'status-badge',
                                     message.parsed_by === 'anthropic'
                                         ? 'bg-violet-100 text-violet-700'
+                                        : message.parsed_by === 'openrouter'
+                                            ? 'bg-cyan-100 text-cyan-700'
                                         : message.parsed_by === 'openai'
                                             ? 'bg-sky-100 text-sky-700'
                                             : message.parsed_by === 'review'
@@ -102,6 +113,17 @@ function ParseCard({ message }: { message: Message }) {
                                         {message.parsed_type}
                                     </span>
                                 )}
+                                {classification && (
+                                    <span className={cn(
+                                        'status-badge',
+                                        classification === 'actionable' ? 'bg-emerald-100 text-emerald-700' :
+                                            classification === 'context' ? 'bg-sky-100 text-sky-700' :
+                                                classification === 'review' ? 'bg-amber-100 text-amber-700' :
+                                                    'bg-slate-100 text-slate-500'
+                                    )}>
+                                        {classificationLabel[classification]}
+                                    </span>
+                                )}
                             </div>
                             <span className="text-[11px] text-slate-400 tabular-nums">
                                 信心度 {Math.round(message.confidence * 100)}%
@@ -112,7 +134,14 @@ function ParseCard({ message }: { message: Message }) {
                             <div className="min-w-[88px]">
                                 <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">房號</p>
                                 <div className="mt-1 flex gap-1.5 flex-wrap">
-                                    {message.parsed_room.length > 0 ? message.parsed_room.map(room => (
+                                    {(message.parsed_room_refs?.length ?? 0) > 0 ? message.parsed_room_refs!.map(ref => (
+                                        <span
+                                            key={`${ref.display_code}-${ref.scope}`}
+                                            className="px-2 py-0.5 bg-white rounded-md text-xs font-bold text-slate-700 shadow-sm border border-slate-200"
+                                        >
+                                            {ref.display_code}
+                                        </span>
+                                    )) : message.parsed_room.length > 0 ? message.parsed_room.map(room => (
                                         <span
                                             key={room}
                                             className="px-2 py-0.5 bg-white rounded-md text-xs font-bold text-slate-700 shadow-sm border border-slate-200"
@@ -138,6 +167,11 @@ function ParseCard({ message }: { message: Message }) {
                             <p className="mt-1 text-xs leading-relaxed text-slate-600">
                                 {message.parsed_explanation || '未提供額外解釋。'}
                             </p>
+                            {message.ai_classification_reason && (
+                                <p className="mt-1 text-[11px] text-slate-500">
+                                    AI 分類：{message.ai_classification_reason}
+                                </p>
+                            )}
                             {message.parsed_model && (
                                 <p className="mt-1 text-[11px] text-slate-400">
                                     模型 / 引擎：{message.parsed_model}
@@ -163,7 +197,21 @@ function ParseCard({ message }: { message: Message }) {
     );
 }
 
-function HandoffCard({ handoff, onAcknowledge }: { handoff: Handoff; onAcknowledge: (id: string) => void }) {
+function HandoffCard({
+    handoff,
+    operatorName,
+    reason,
+    submitting,
+    onReasonChange,
+    onAcknowledge,
+}: {
+    handoff: Handoff;
+    operatorName: string;
+    reason: string;
+    submitting: boolean;
+    onReasonChange: (id: string, value: string) => void;
+    onAcknowledge: (handoff: Handoff, reason: string) => void;
+}) {
     const fromInfo = DEPT_INFO[handoff.from_dept];
     const toInfo = DEPT_INFO[handoff.to_dept];
 
@@ -200,41 +248,76 @@ function HandoffCard({ handoff, onAcknowledge }: { handoff: Handoff; onAcknowled
                     </div>
                 </div>
                 {handoff.status === 'pending' && (
-                    <button
-                        onClick={() => onAcknowledge(handoff.id)}
-                        className="shrink-0 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-xs font-semibold hover:bg-blue-100 transition-colors"
-                    >
-                        確認
-                    </button>
+                    <div className="shrink-0 w-full sm:w-44 space-y-2">
+                        <input
+                            type="text"
+                            value={reason}
+                            onChange={e => onReasonChange(handoff.id, e.target.value)}
+                            placeholder="確認原因"
+                            className="input-field text-xs"
+                        />
+                        <button
+                            onClick={() => onAcknowledge(handoff, reason)}
+                            disabled={submitting || !operatorName.trim() || !reason.trim()}
+                            className="w-full px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-xs font-semibold hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {submitting ? '提交中...' : '確認'}
+                        </button>
+                    </div>
                 )}
             </div>
         </div>
     );
 }
 
-type CenterFilter = 'all' | 'parsed' | 'review' | 'group' | 'direct';
+type CenterFilter = 'all' | 'parsed' | 'review' | 'group' | 'direct' | 'relevant' | 'irrelevant';
+const OPERATOR_STORAGE_KEY = 'tpsoho-operator-name';
 
 export default function DashboardPage() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [handoffs, setHandoffs] = useState<Handoff[]>([]);
+    const [pendingReviewMessageIds, setPendingReviewMessageIds] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
     const [newMessage, setNewMessage] = useState('');
     const [senderName, setSenderName] = useState('');
     const [chatName, setChatName] = useState('SOHO 前線🏡🧹🦫🐿️');
     const [chatType, setChatType] = useState<ChatType>('group');
     const [centerFilter, setCenterFilter] = useState<CenterFilter>('all');
+    const [sendingMessage, setSendingMessage] = useState(false);
+    const [operatorName, setOperatorName] = useState('');
+    const [handoffReasons, setHandoffReasons] = useState<Record<string, string>>({});
+    const [updatingHandoffId, setUpdatingHandoffId] = useState<string | null>(null);
     const { showToast } = useToast();
+
+    useEffect(() => {
+        const saved = window.localStorage.getItem(OPERATOR_STORAGE_KEY);
+        if (saved) setOperatorName(saved);
+    }, []);
+
+    useEffect(() => {
+        if (operatorName.trim()) {
+            window.localStorage.setItem(OPERATOR_STORAGE_KEY, operatorName.trim());
+        }
+    }, [operatorName]);
 
     const fetchData = useCallback(async () => {
         try {
-            const [msgRes, hoRes] = await Promise.all([
+            const [msgRes, hoRes, reviewRes] = await Promise.all([
                 fetch('/api/messages'),
                 fetch('/api/handoffs'),
+                fetch('/api/reviews'),
             ]);
-            if (!msgRes.ok || !hoRes.ok) throw new Error('載入失敗');
-            const [msgs, hos] = await Promise.all([msgRes.json(), hoRes.json()]);
+            if (!msgRes.ok || !hoRes.ok || !reviewRes.ok) throw new Error('載入失敗');
+            const [msgs, hos, reviews] = await Promise.all([msgRes.json(), hoRes.json(), reviewRes.json()]);
             setMessages(msgs);
             setHandoffs(hos);
+            setPendingReviewMessageIds(
+                Array.from(new Set(
+                    reviews
+                        .filter((review: { review_status: string; message_id: string }) => review.review_status === 'pending')
+                        .map((review: { message_id: string }) => review.message_id)
+                ))
+            );
         } catch (e: unknown) {
             showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         } finally {
@@ -246,12 +329,18 @@ export default function DashboardPage() {
 
     usePolling(fetchData, 5000);
 
+    const pendingReviewIdSet = useMemo(() => new Set(pendingReviewMessageIds), [pendingReviewMessageIds]);
+
     const filteredMessages = useMemo(() => {
         switch (centerFilter) {
             case 'parsed':
                 return messages.filter(message => Boolean(message.parsed_action));
             case 'review':
-                return messages.filter(message => message.confidence < 0.75 || !message.parsed_action);
+                return messages.filter(message => pendingReviewIdSet.has(message.id));
+            case 'relevant':
+                return messages.filter(message => message.ai_classification && message.ai_classification !== 'irrelevant');
+            case 'irrelevant':
+                return messages.filter(message => message.ai_classification === 'irrelevant');
             case 'group':
                 return messages.filter(message => message.chat_type === 'group');
             case 'direct':
@@ -259,10 +348,11 @@ export default function DashboardPage() {
             default:
                 return messages;
         }
-    }, [centerFilter, messages]);
+    }, [centerFilter, messages, pendingReviewIdSet]);
 
     const handleSendMessage = async () => {
-        if (!newMessage.trim()) return;
+        if (!newMessage.trim() || sendingMessage) return;
+        setSendingMessage(true);
         try {
             const res = await fetch('/api/messages', {
                 method: 'POST',
@@ -274,34 +364,63 @@ export default function DashboardPage() {
                     chat_type: chatType,
                 }),
             });
-            if (!res.ok) throw new Error('發送失敗');
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || '發送失敗');
             setNewMessage('');
             showToast('訊息已匯入訊息中心', 'success');
             fetchData();
         } catch (e: unknown) {
             showToast(e instanceof Error ? e.message : '操作失敗', 'error');
+        } finally {
+            setSendingMessage(false);
         }
     };
 
-    const handleAcknowledge = async (id: string) => {
+    const handleAcknowledge = async (handoff: Handoff, reason: string) => {
+        const actor = operatorName.trim();
+        const actionReason = reason.trim();
+
+        if (!actor) {
+            showToast('請先填寫操作人', 'error');
+            return;
+        }
+
+        if (!actionReason) {
+            showToast('請先填寫確認原因', 'error');
+            return;
+        }
+
+        setUpdatingHandoffId(handoff.id);
         try {
             const res = await fetch('/api/handoffs', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id, status: 'acknowledged' }),
+                body: JSON.stringify({
+                    id: handoff.id,
+                    status: 'acknowledged',
+                    actor,
+                    reason: actionReason,
+                    expectedVersion: handoff.version,
+                }),
             });
-            if (!res.ok) throw new Error('確認失敗');
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || '確認失敗');
+            setHandoffReasons(prev => ({ ...prev, [handoff.id]: '' }));
             showToast('交接已確認', 'success');
             fetchData();
         } catch (e: unknown) {
             showToast(e instanceof Error ? e.message : '操作失敗', 'error');
+        } finally {
+            setUpdatingHandoffId(null);
         }
     };
 
     const pendingHandoffs = handoffs.filter(h => h.status === 'pending');
     const otherHandoffs = handoffs.filter(h => h.status !== 'pending');
-    const reviewCount = messages.filter(message => message.confidence < 0.75 || !message.parsed_action).length;
+    const reviewCount = pendingReviewMessageIds.length;
     const parsedCount = messages.filter(message => Boolean(message.parsed_action)).length;
+    const relevantCount = messages.filter(message => message.ai_classification && message.ai_classification !== 'irrelevant').length;
+    const irrelevantCount = messages.filter(message => message.ai_classification === 'irrelevant').length;
     const groupCount = messages.filter(message => message.chat_type === 'group').length;
     const directCount = messages.filter(message => message.chat_type === 'direct').length;
 
@@ -389,13 +508,17 @@ export default function DashboardPage() {
                                 type="text"
                                 value={newMessage}
                                 onChange={e => setNewMessage(e.target.value)}
-                                onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
+                                onKeyDown={e => e.key === 'Enter' && !sendingMessage && handleSendMessage()}
                                 placeholder="模擬 duty phone 收到的文字訊息..."
                                 className="input-field"
                             />
-                            <button onClick={handleSendMessage} className="btn-primary flex items-center gap-2 justify-center">
+                            <button
+                                onClick={handleSendMessage}
+                                disabled={sendingMessage || !newMessage.trim()}
+                                className="btn-primary flex items-center gap-2 justify-center disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
                                 <Send size={14} />
-                                匯入
+                                {sendingMessage ? 'AI 解析中...' : '匯入'}
                             </button>
                         </div>
                         <p className="text-[11px] text-slate-400">這裡顯示 AI 如何理解左側 WhatsApp 原文，不再嘗試取代原生 WhatsApp 畫面。</p>
@@ -407,11 +530,13 @@ export default function DashboardPage() {
                             <span>AI 判斷篩選</span>
                         </div>
                         <div className="flex gap-2 flex-wrap">
-                            {([
-                                { key: 'all' as CenterFilter, label: `全部 (${messages.length})` },
-                                { key: 'parsed' as CenterFilter, label: `已解析 (${parsedCount})` },
-                                { key: 'review' as CenterFilter, label: `待覆核 (${reviewCount})` },
-                                { key: 'group' as CenterFilter, label: `群組 (${groupCount})` },
+                                {([
+                                    { key: 'all' as CenterFilter, label: `全部 (${messages.length})` },
+                                    { key: 'relevant' as CenterFilter, label: `有用/背景 (${relevantCount})` },
+                                    { key: 'irrelevant' as CenterFilter, label: `無關 (${irrelevantCount})` },
+                                    { key: 'parsed' as CenterFilter, label: `已解析 (${parsedCount})` },
+                                    { key: 'review' as CenterFilter, label: `待覆核 (${reviewCount})` },
+                                    { key: 'group' as CenterFilter, label: `群組 (${groupCount})` },
                                 { key: 'direct' as CenterFilter, label: `直聊 (${directCount})` },
                             ]).map(filter => (
                                 <button
@@ -432,7 +557,11 @@ export default function DashboardPage() {
 
                     <div className="space-y-3">
                         {filteredMessages.map(message => (
-                            <ParseCard key={message.id} message={message} />
+                            <ParseCard
+                                key={message.id}
+                                message={message}
+                                needsReview={pendingReviewIdSet.has(message.id)}
+                            />
                         ))}
 
                         {filteredMessages.length === 0 && (
@@ -450,6 +579,18 @@ export default function DashboardPage() {
                         <h2 className="section-title">交接信號</h2>
                     </div>
 
+                    <div className="glass-card p-4 space-y-2">
+                        <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">操作人</label>
+                        <input
+                            type="text"
+                            value={operatorName}
+                            onChange={e => setOperatorName(e.target.value)}
+                            placeholder="例如：May / Admin"
+                            className="input-field"
+                        />
+                        <p className="text-[11px] text-slate-400">待確認交接會沿用這個操作人名稱，並要求逐筆填寫確認原因。</p>
+                    </div>
+
                     {pendingHandoffs.length > 0 && (
                         <div className="space-y-3">
                             <p className="text-xs font-semibold text-amber-600 flex items-center gap-1.5">
@@ -457,7 +598,15 @@ export default function DashboardPage() {
                                 待確認 ({pendingHandoffs.length})
                             </p>
                             {pendingHandoffs.map(handoff => (
-                                <HandoffCard key={handoff.id} handoff={handoff} onAcknowledge={handleAcknowledge} />
+                                <HandoffCard
+                                    key={handoff.id}
+                                    handoff={handoff}
+                                    operatorName={operatorName}
+                                    reason={handoffReasons[handoff.id] || ''}
+                                    submitting={updatingHandoffId === handoff.id}
+                                    onReasonChange={(id, value) => setHandoffReasons(prev => ({ ...prev, [id]: value }))}
+                                    onAcknowledge={handleAcknowledge}
+                                />
                             ))}
                         </div>
                     )}
@@ -466,7 +615,15 @@ export default function DashboardPage() {
                         <div className="space-y-3 mt-4">
                             <p className="text-xs font-semibold text-slate-400">已處理</p>
                             {otherHandoffs.map(handoff => (
-                                <HandoffCard key={handoff.id} handoff={handoff} onAcknowledge={handleAcknowledge} />
+                                <HandoffCard
+                                    key={handoff.id}
+                                    handoff={handoff}
+                                    operatorName={operatorName}
+                                    reason={handoffReasons[handoff.id] || ''}
+                                    submitting={false}
+                                    onReasonChange={(id, value) => setHandoffReasons(prev => ({ ...prev, [id]: value }))}
+                                    onAcknowledge={handleAcknowledge}
+                                />
                             ))}
                         </div>
                     )}

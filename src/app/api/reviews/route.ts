@@ -2,8 +2,16 @@ import { NextResponse } from 'next/server';
 import { StoreData, getStore, withStoreWrite } from '@/lib/store';
 import { applyRoomStatusUpdate } from '@/lib/ingest';
 import { analyzeHandoffSignal, enforceHandoffSafety } from '@/lib/message-parsing';
-import { DeptCode, Handoff, HandoffType, ParseReview, ReviewStatus } from '@/lib/types';
+import { DeptCode, Handoff, HandoffType, ParseReview, ReviewStatus, RoomReference } from '@/lib/types';
 import { parseJsonBody } from '@/lib/api-utils';
+import { canApproveReview } from '@/lib/permissions';
+import {
+    assertAllowed,
+    assertExpectedVersion,
+    getRouteErrorStatus,
+    requireAuthenticatedUser,
+} from '@/lib/route-mutations';
+import { ensureRoomCycleForReference } from '@/lib/room-lifecycle';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +49,28 @@ function handoffExists(store: StoreData, handoff: Pick<Handoff, 'room_id' | 'fro
     );
 }
 
+function roomRefsFromReview(store: StoreData, review: ParseReview, fallbackRooms: string[]): RoomReference[] {
+    if (Array.isArray(review.room_cycle_ids) && review.room_cycle_ids.length > 0) {
+        const refs = review.room_cycle_ids
+            .map(id => store.room_cycles.find(cycle => cycle.id === id))
+            .filter((cycle): cycle is NonNullable<typeof cycle> => Boolean(cycle))
+            .map(cycle => ({
+                physical_room_id: cycle.room_id,
+                display_code: cycle.display_code,
+                scope: cycle.scope,
+                raw_match: cycle.display_code,
+            }));
+        if (refs.length > 0) return refs;
+    }
+
+    return fallbackRooms.map(room => ({
+        physical_room_id: room,
+        display_code: room,
+        scope: 'active',
+        raw_match: room,
+    }));
+}
+
 export async function GET() {
     const store = getStore();
     const sorted = [...store.parse_reviews].sort(
@@ -53,10 +83,13 @@ export async function POST(request: Request) {
     const parsed = await parseJsonBody<Record<string, unknown>>(request);
     if ('error' in parsed) return parsed.error;
     const body = parsed.data;
+    const auth = await requireAuthenticatedUser(request);
+    if ('error' in auth) return auth.error;
 
     const now = new Date().toISOString();
 
     const review = await withStoreWrite(store => {
+        assertAllowed(canApproveReview(auth.user));
         const nextReview: ParseReview = {
             id: `rev-${Date.now()}`,
             property_id: (body.property_id as string) || 'tp-soho',
@@ -66,6 +99,7 @@ export async function POST(request: Request) {
             sender_dept: validateDept(body.sender_dept) ? body.sender_dept : 'conc',
             confidence: (body.confidence as number) ?? 0,
             suggested_rooms: Array.isArray(body.suggested_rooms) ? body.suggested_rooms : [],
+            room_cycle_ids: Array.isArray(body.room_cycle_ids) ? body.room_cycle_ids.filter(id => typeof id === 'string') : [],
             suggested_action: (body.suggested_action as string) ?? null,
             suggested_type: validateType(body.suggested_type) ? body.suggested_type : null,
             suggested_from_dept: validateDept(body.suggested_from_dept) ? body.suggested_from_dept : null,
@@ -113,6 +147,9 @@ export async function PUT(request: Request) {
         return NextResponse.json({ error: 'Review 只可標記為 approved / corrected / dismissed' }, { status: 400 });
     }
 
+    const auth = await requireAuthenticatedUser(request);
+    if ('error' in auth) return auth.error;
+
     try {
         const updatedReview = await withStoreWrite(store => {
             const idx = store.parse_reviews.findIndex(review => review.id === id);
@@ -122,10 +159,8 @@ export async function PUT(request: Request) {
 
             const review = store.parse_reviews[idx];
             const now = new Date().toISOString();
-
-            if (expectedVersion !== undefined && expectedVersion !== review.version) {
-                throw new Error('版本衝突：此覆核已被其他人修改，請重新載入');
-            }
+            assertAllowed(canApproveReview(auth.user));
+            assertExpectedVersion(expectedVersion, review.version, '覆核');
 
             if (review.review_status !== 'pending') {
                 throw new Error('此覆核已處理，不能重複 approve / correct');
@@ -163,7 +198,7 @@ export async function PUT(request: Request) {
             }
 
             review.review_status = review_status;
-            review.reviewed_by = reviewed_by || 'Admin';
+            review.reviewed_by = reviewed_by?.trim() || auth.user.name;
             review.reviewed_at = now;
             review.updated_at = now;
             review.version = (review.version || 1) + 1;
@@ -186,16 +221,20 @@ export async function PUT(request: Request) {
                 const fromDept = safeReviewed.from_dept;
                 const toDept = safeReviewed.to_dept;
                 const reviewedType = safeReviewed.type;
+                const roomRefs = roomRefsFromReview(store, review, rooms);
+                const activeRoomRefs = roomRefs.filter(ref => ref.scope === 'active');
 
                 review.reviewed_rooms = rooms;
                 review.reviewed_action = action;
                 review.reviewed_type = reviewedType;
                 review.reviewed_from_dept = fromDept;
                 review.reviewed_to_dept = toDept;
+                review.room_cycle_ids = roomRefs.map(ref => ensureRoomCycleForReference(store, ref, review.property_id).id);
 
                 const msg = store.messages.find(message => message.id === review.message_id);
                 if (msg) {
                     msg.parsed_room = rooms;
+                    msg.parsed_room_refs = roomRefs;
                     msg.parsed_action = action;
                     msg.parsed_type = reviewedType;
                     msg.confidence = safeReviewed.confidence;
@@ -205,11 +244,12 @@ export async function PUT(request: Request) {
                 }
 
                 if (reviewedType === 'handoff' && handoffSignal.allowsImmediateHandoff && fromDept && toDept) {
-                    for (const roomId of rooms) {
+                    for (const roomRef of activeRoomRefs) {
                         const nextHandoff: Handoff = {
-                            id: `ho-rev-${Date.now()}-${roomId}`,
+                            id: `ho-rev-${Date.now()}-${roomRef.physical_room_id}`,
                             property_id: review.property_id ?? 'tp-soho',
-                            room_id: roomId,
+                            room_id: roomRef.physical_room_id,
+                            room_cycle_id: ensureRoomCycleForReference(store, roomRef, review.property_id).id,
                             from_dept: fromDept,
                             to_dept: toDept,
                             action: action || '',
@@ -226,8 +266,8 @@ export async function PUT(request: Request) {
                     }
                 }
 
-                for (const roomId of rooms) {
-                    const room = store.rooms.find(candidate => candidate.id === roomId);
+                for (const roomRef of activeRoomRefs) {
+                    const room = store.rooms.find(candidate => candidate.id === roomRef.physical_room_id);
                     if (!room || !action) continue;
                     applyRoomStatusUpdate(room, action, fromDept, review.sender_name);
                 }
@@ -239,7 +279,9 @@ export async function PUT(request: Request) {
         return NextResponse.json(updatedReview);
     } catch (error) {
         const message = error instanceof Error ? error.message : '更新覆核失敗';
-        const status = message === 'Review not found' ? 404 : message.includes('已處理') || message.includes('衝突') ? 409 : 400;
+        const status = error instanceof Error && (error.message.includes('已處理') || error.message.includes('衝突'))
+            ? 409
+            : getRouteErrorStatus(error, 'Review not found');
         return NextResponse.json({ error: message }, { status });
     }
 }

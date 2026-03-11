@@ -1,10 +1,13 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Upload, FileText, CheckCircle, AlertCircle, ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { usePolling } from '@/hooks/usePolling';
 
 interface UploadResult {
+    upload_batch_id: string;
+    ai_batch_run_id: string;
     total_lines: number;
     parsed_messages: number;
     handoffs_created: number;
@@ -12,19 +15,47 @@ interface UploadResult {
     chat_type: 'group' | 'direct';
 }
 
+interface UploadBatchStatus {
+    id: string;
+    status: 'uploaded' | 'analyzing' | 'completed' | 'failed';
+    message_count: number;
+    review_count: number;
+    actionable_count: number;
+    context_count: number;
+    irrelevant_count: number;
+    summary_digest: string | null;
+    ai_batch_run: {
+        id: string;
+        status: 'queued' | 'running' | 'completed' | 'failed';
+        total_chunks: number;
+        completed_chunks: number;
+    } | null;
+}
+
 export default function UploadPage() {
     const [dragOver, setDragOver] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [result, setResult] = useState<UploadResult | null>(null);
+    const [batchStatus, setBatchStatus] = useState<UploadBatchStatus | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [chatName, setChatName] = useState('');
     const [chatType, setChatType] = useState<'group' | 'direct'>('group');
     const fileRef = useRef<HTMLInputElement>(null);
 
+    const fetchBatchStatus = useCallback(async () => {
+        if (!result?.upload_batch_id) return;
+        const res = await fetch(`/api/uploads/${result.upload_batch_id}`);
+        if (!res.ok) return;
+        setBatchStatus(await res.json());
+    }, [result?.upload_batch_id]);
+
+    usePolling(fetchBatchStatus, result?.upload_batch_id ? 3000 : 0);
+
     const handleUpload = async (file: File) => {
         setUploading(true);
         setError(null);
         setResult(null);
+        setBatchStatus(null);
         try {
             const formData = new FormData();
             formData.append('file', file);
@@ -34,6 +65,10 @@ export default function UploadPage() {
             if (!res.ok) throw new Error('上傳失敗');
             const data = await res.json();
             setResult(data);
+            const batchRes = await fetch(`/api/uploads/${data.upload_batch_id}`);
+            if (batchRes.ok) {
+                setBatchStatus(await batchRes.json());
+            }
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : '操作失敗');
         } finally {
@@ -57,7 +92,7 @@ export default function UploadPage() {
         <div className="space-y-6 max-w-2xl">
             <div>
                 <h1 className="page-title">上傳 WhatsApp 訊息</h1>
-                <p className="text-sm text-slate-500 mt-1">上傳 WhatsApp 對話匯出的 .txt 檔案，系統會自動解析所有訊息</p>
+                <p className="text-sm text-slate-500 mt-1">上傳 WhatsApp 對話匯出的 .txt 或 .zip，系統會先保存全部原始訊息，再自動做全檔 AI 營運分析</p>
             </div>
 
             {/* Upload instructions */}
@@ -117,7 +152,7 @@ export default function UploadPage() {
                 {uploading ? (
                     <div className="flex flex-col items-center gap-3">
                         <div className="w-10 h-10 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-                        <p className="text-sm text-blue-600 font-medium">解析中...</p>
+                        <p className="text-sm text-blue-600 font-medium">快速解析中...</p>
                     </div>
                 ) : (
                     <div className="flex flex-col items-center gap-3">
@@ -125,9 +160,9 @@ export default function UploadPage() {
                             <Upload size={28} className="text-blue-500" />
                         </div>
                         <p className="text-sm font-semibold text-slate-700">拖放 WhatsApp 匯出檔到此處</p>
-                        <p className="text-xs text-slate-400">支援 `.txt` 和 `.zip`，media 會自動略過</p>
-                    </div>
-                )}
+                    <p className="text-xs text-slate-400">支援 `.txt` 和 `.zip`，上傳先成功，AI 之後自動背景分析整份對話</p>
+                </div>
+            )}
             </div>
 
             {/* Result */}
@@ -153,12 +188,59 @@ export default function UploadPage() {
                             <p className="text-xs text-slate-500 mt-1">已解析訊息</p>
                         </div>
                         <div className="text-center p-3 bg-amber-50 rounded-xl">
-                            <p className="text-2xl font-bold text-amber-700">{result.handoffs_created}</p>
-                            <p className="text-xs text-slate-500 mt-1">交接信號</p>
+                            <p className="text-2xl font-bold text-amber-700">{batchStatus?.message_count ?? result.parsed_messages}</p>
+                            <p className="text-xs text-slate-500 mt-1">已入庫訊息</p>
                         </div>
                     </div>
+                    <div className="mt-4 p-3 bg-slate-50 rounded-xl space-y-2">
+                        <p className="text-xs text-slate-500">AI 分析狀態</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <span className={cn(
+                                'status-badge',
+                                batchStatus?.ai_batch_run?.status === 'completed'
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : batchStatus?.ai_batch_run?.status === 'failed'
+                                        ? 'bg-red-100 text-red-700'
+                                        : 'bg-blue-100 text-blue-700'
+                            )}>
+                                {batchStatus?.ai_batch_run?.status === 'completed'
+                                    ? '分析完成'
+                                    : batchStatus?.ai_batch_run?.status === 'failed'
+                                        ? '分析失敗'
+                                        : '背景分析中'}
+                            </span>
+                            {batchStatus?.ai_batch_run && (
+                                <span className="text-xs text-slate-500">
+                                    chunk {batchStatus.ai_batch_run.completed_chunks}/{batchStatus.ai_batch_run.total_chunks || '?'}
+                                </span>
+                            )}
+                        </div>
+                        {batchStatus && (
+                            <div className="grid grid-cols-4 gap-2">
+                                <div className="p-2 bg-white rounded-lg text-center">
+                                    <p className="text-lg font-bold text-emerald-600">{batchStatus.actionable_count}</p>
+                                    <p className="text-[11px] text-slate-500">有用</p>
+                                </div>
+                                <div className="p-2 bg-white rounded-lg text-center">
+                                    <p className="text-lg font-bold text-sky-600">{batchStatus.context_count}</p>
+                                    <p className="text-[11px] text-slate-500">背景</p>
+                                </div>
+                                <div className="p-2 bg-white rounded-lg text-center">
+                                    <p className="text-lg font-bold text-slate-600">{batchStatus.irrelevant_count}</p>
+                                    <p className="text-[11px] text-slate-500">無關</p>
+                                </div>
+                                <div className="p-2 bg-white rounded-lg text-center">
+                                    <p className="text-lg font-bold text-amber-600">{batchStatus.review_count}</p>
+                                    <p className="text-[11px] text-slate-500">覆核</p>
+                                </div>
+                            </div>
+                        )}
+                        {batchStatus?.summary_digest && (
+                            <p className="text-xs leading-relaxed text-slate-600 whitespace-pre-wrap">{batchStatus.summary_digest}</p>
+                        )}
+                    </div>
                     <p className="text-xs text-slate-500 mt-4 flex items-center gap-1">
-                        <ArrowRight size={12} /> 前往「訊息中心」查看解析結果
+                        <ArrowRight size={12} /> 前往「訊息中心」看原文，前往「AI 管理建議」看批次分析摘要
                     </p>
                 </div>
             )}

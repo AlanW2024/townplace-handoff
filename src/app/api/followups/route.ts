@@ -3,6 +3,14 @@ import { getStore, withStoreWrite } from '@/lib/store';
 import { createAuditLog, getEntityAuditLogs, getLatestEntityAuditLog } from '@/lib/audit';
 import { AuditFieldChange, DeptCode, Followup, FollowupStatus } from '@/lib/types';
 import { parseJsonBody } from '@/lib/api-utils';
+import { canCloseFollowup, canEditFollowup } from '@/lib/permissions';
+import {
+    assertAllowed,
+    assertExpectedVersion,
+    getRouteErrorStatus,
+    requireAuthenticatedUser,
+    resolveReason,
+} from '@/lib/route-mutations';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,7 +58,7 @@ export async function POST(request: Request) {
     const body = parsed.data;
 
     const actorName = typeof body.actor === 'string' ? body.actor.trim() : '';
-    const actionReason = typeof body.reason === 'string' ? body.reason.trim() : '';
+    const actionReason = resolveReason(body.reason);
     const sourceType = body.source_type || 'manual';
 
     if (sourceType !== 'suggestion' && !actorName) {
@@ -69,8 +77,13 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'priority 必須是 info、warning 或 urgent' }, { status: 400 });
     }
 
+    const auth = await requireAuthenticatedUser(request);
+    if ('error' in auth) return auth.error;
+
     try {
         const created = await withStoreWrite(store => {
+            assertAllowed(canEditFollowup(auth.user, (body.assigned_dept as DeptCode) || 'mgmt'));
+
             if (sourceType === 'suggestion' && body.source_id) {
                 const existing = store.followups.find(
                     followup => followup.source_type === 'suggestion' && followup.source_id === body.source_id
@@ -105,6 +118,7 @@ export async function POST(request: Request) {
                 entity_id: followup.id,
                 action: 'created',
                 actor: actorName || 'AI 建議',
+                actor_id: auth.user.id,
                 reason: actionReason || '由 AI 建議建立跟進事項',
                 from_status: null,
                 to_status: followup.status,
@@ -145,7 +159,7 @@ export async function PUT(request: Request) {
     const { id, status, assigned_dept, assigned_to, due_at, actor, reason, expectedVersion } = parsed.data;
 
     const actorName = typeof actor === 'string' ? actor.trim() : '';
-    const actionReason = typeof reason === 'string' ? reason.trim() : '';
+    const actionReason = resolveReason(reason);
 
     if (!actorName) {
         return NextResponse.json({ error: '請填寫操作人' }, { status: 400 });
@@ -158,6 +172,9 @@ export async function PUT(request: Request) {
         return NextResponse.json({ error: 'Invalid assigned_dept' }, { status: 400 });
     }
 
+    const auth = await requireAuthenticatedUser(request);
+    if ('error' in auth) return auth.error;
+
     try {
         const updated = await withStoreWrite(store => {
             const idx = store.followups.findIndex(f => f.id === id);
@@ -166,10 +183,15 @@ export async function PUT(request: Request) {
             }
 
             const current = store.followups[idx];
+            const nextAssignedDept = typeof assigned_dept === 'undefined'
+                ? current.assigned_dept
+                : (assigned_dept as DeptCode);
 
-            if (expectedVersion !== undefined && expectedVersion !== current.version) {
-                throw new Error('版本衝突：此跟進事項已被其他人修改，請重新載入');
+            assertAllowed(canEditFollowup(auth.user, current.assigned_dept));
+            if (nextAssignedDept !== current.assigned_dept) {
+                assertAllowed(canEditFollowup(auth.user, nextAssignedDept));
             }
+            assertExpectedVersion(expectedVersion, current.version, '跟進事項');
 
             const nextFollowup = { ...current };
             const changes: AuditFieldChange[] = [];
@@ -181,6 +203,10 @@ export async function PUT(request: Request) {
             if (typeof status === 'string' && status !== current.status) {
                 if (!(status in FOLLOWUP_STATUS_ORDER)) {
                     throw new Error('Invalid followup status');
+                }
+
+                if (status === 'done' || status === 'dismissed') {
+                    assertAllowed(canCloseFollowup(auth.user, nextAssignedDept));
                 }
 
                 nextFollowup.status = status as FollowupStatus;
@@ -224,6 +250,7 @@ export async function PUT(request: Request) {
                 entity_id: current.id,
                 action: auditAction,
                 actor: actorName,
+                actor_id: auth.user.id,
                 reason: actionReason,
                 from_status: fromStatus,
                 to_status: toStatus,
@@ -240,7 +267,7 @@ export async function PUT(request: Request) {
         return NextResponse.json(updated);
     } catch (error) {
         const message = error instanceof Error ? error.message : '更新失敗';
-        const statusCode = message === 'Followup not found' ? 404 : message.includes('版本衝突') ? 409 : 400;
+        const statusCode = getRouteErrorStatus(error, 'Followup not found');
         return NextResponse.json({ error: message }, { status: statusCode });
     }
 }

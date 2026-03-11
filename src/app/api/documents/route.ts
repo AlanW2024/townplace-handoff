@@ -3,10 +3,19 @@ import { getStore, withStoreWrite } from '@/lib/store';
 import { createAuditLog, getEntityAuditLogs, getLatestEntityAuditLog } from '@/lib/audit';
 import { AuditFieldChange, DocStatus } from '@/lib/types';
 import { parseJsonBody } from '@/lib/api-utils';
+import { canAdvanceDocument, canEditDocument } from '@/lib/permissions';
+import {
+    assertAllowed,
+    assertExpectedVersion,
+    getRouteErrorStatus,
+    requireAuthenticatedUser,
+    resolveReason,
+} from '@/lib/route-mutations';
 
 export const dynamic = 'force-dynamic';
 
 const DOC_PIPELINE: DocStatus[] = ['not_started', 'preparing', 'pending_sign', 'with_tenant', 'with_company', 'completed'];
+const DOCUMENT_OWNER_DEPT = 'lease' as const;
 
 function buildDocumentResponse(store: ReturnType<typeof getStore>) {
     return store.documents.map(document => ({
@@ -35,7 +44,7 @@ export async function PUT(request: Request) {
     const { id, status, actor, reason, current_holder, notes, expectedVersion } = parsed.data;
 
     const actorName = typeof actor === 'string' ? actor.trim() : '';
-    const actionReason = typeof reason === 'string' ? reason.trim() : '';
+    const actionReason = resolveReason(reason);
 
     if (!actorName) {
         return NextResponse.json({ error: '請填寫操作人' }, { status: 400 });
@@ -45,6 +54,9 @@ export async function PUT(request: Request) {
         return NextResponse.json({ error: '請填寫操作原因' }, { status: 400 });
     }
 
+    const auth = await requireAuthenticatedUser(request);
+    if ('error' in auth) return auth.error;
+
     try {
         const updated = await withStoreWrite(store => {
             const idx = store.documents.findIndex(document => document.id === id);
@@ -53,10 +65,8 @@ export async function PUT(request: Request) {
             }
 
             const current = store.documents[idx];
-
-            if (expectedVersion !== undefined && expectedVersion !== current.version) {
-                throw new Error('版本衝突：此文件已被其他人修改，請重新載入');
-            }
+            assertAllowed(canEditDocument(auth.user, DOCUMENT_OWNER_DEPT));
+            assertExpectedVersion(expectedVersion, current.version, '文件');
 
             const nextDocument = { ...current };
             const changes: AuditFieldChange[] = [];
@@ -77,6 +87,7 @@ export async function PUT(request: Request) {
                     throw new Error('文件只可逐步推進或退回一步');
                 }
 
+                assertAllowed(canAdvanceDocument(auth.user));
                 nextDocument.status = status as DocStatus;
                 auditAction = nextIdx > currentIdx ? 'status_advanced' : 'status_reverted';
                 fromStatus = current.status;
@@ -111,6 +122,7 @@ export async function PUT(request: Request) {
                 entity_id: current.id,
                 action: auditAction,
                 actor: actorName,
+                actor_id: auth.user.id,
                 reason: actionReason,
                 from_status: fromStatus,
                 to_status: toStatus,
@@ -127,7 +139,7 @@ export async function PUT(request: Request) {
         return NextResponse.json(updated);
     } catch (error) {
         const message = error instanceof Error ? error.message : '更新失敗';
-        const statusCode = message === 'Document not found' ? 404 : message.includes('版本衝突') ? 409 : 400;
+        const statusCode = getRouteErrorStatus(error, 'Document not found');
         return NextResponse.json({ error: message }, { status: statusCode });
     }
 }

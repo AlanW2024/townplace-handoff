@@ -1,9 +1,29 @@
 import fs from 'fs';
 import path from 'path';
-import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, AuditLog, DeptCode, ChatType, ParseEngine, Property, User } from './types';
+import {
+    Room,
+    Message,
+    Handoff,
+    Document,
+    Booking,
+    Followup,
+    ParseReview,
+    AuditLog,
+    DeptCode,
+    ChatType,
+    ParseEngine,
+    Property,
+    User,
+    RoomCycle,
+    UploadBatch,
+    AiBatchRun,
+    AiExtractedEvent,
+    RoomReference,
+} from './types';
 import { createAuditLog } from './audit';
 import { parseWhatsAppMessage } from './parser';
 import { emitEvent } from './observability';
+import { createActiveCycleFromRoom, getActiveRoomCycle, normalizeRoomCycles } from './room-lifecycle';
 
 export const DEFAULT_PROPERTY_ID = 'tp-soho';
 
@@ -11,6 +31,7 @@ export interface StoreData {
     properties: Property[];
     users: User[];
     rooms: Room[];
+    room_cycles: RoomCycle[];
     messages: Message[];
     handoffs: Handoff[];
     documents: Document[];
@@ -18,6 +39,9 @@ export interface StoreData {
     followups: Followup[];
     parse_reviews: ParseReview[];
     audit_logs: AuditLog[];
+    upload_batches: UploadBatch[];
+    ai_batch_runs: AiBatchRun[];
+    ai_extracted_events: AiExtractedEvent[];
 }
 
 const STORE_PATH = path.join(process.cwd(), '.demo-store.json');
@@ -98,6 +122,51 @@ function normalizeRoom(room: Room): Room {
         needs_attention: needsAttention,
         attention_reason: room.attention_reason ?? (needsAttention ? '需要即時跟進' : null),
     };
+}
+
+function buildActiveRoomRef(roomId: string): RoomReference {
+    return {
+        physical_room_id: roomId,
+        display_code: roomId,
+        scope: 'active',
+        raw_match: roomId,
+    };
+}
+
+function resolveActiveRoomCycleId(roomCycles: RoomCycle[], roomId: string, propertyId = DEFAULT_PROPERTY_ID): string {
+    const existing = getActiveRoomCycle({ room_cycles: roomCycles }, roomId);
+    if (existing) return existing.id;
+
+    const syntheticRoom: Room = {
+        id: roomId,
+        property_id: propertyId,
+        floor: Number(roomId.slice(0, -1)) || 0,
+        unit_letter: roomId.slice(-1),
+        room_type: 'Unknown',
+        eng_status: 'n_a',
+        clean_status: 'n_a',
+        lease_status: 'vacant',
+        tenant_name: null,
+        lease_start: null,
+        lease_end: null,
+        notes: null,
+        last_updated_at: new Date().toISOString(),
+        last_updated_by: null,
+        needs_attention: false,
+        attention_reason: null,
+        version: 1,
+    };
+    const cycle = createActiveCycleFromRoom(syntheticRoom, true);
+    roomCycles.push(cycle);
+    return cycle.id;
+}
+
+function normalizeMessageRoomRefs(message: Message): RoomReference[] {
+    if (Array.isArray(message.parsed_room_refs) && message.parsed_room_refs.length > 0) {
+        return message.parsed_room_refs;
+    }
+
+    return (message.parsed_room ?? []).map(buildActiveRoomRef);
 }
 
 function inferSeedChatMetadata(senderName: string, rawText: string): { chat_name: string; chat_type: ChatType } {
@@ -215,6 +284,44 @@ function generateSeedMessages(): Omit<Message, 'parsed_room' | 'parsed_action' |
     });
 }
 
+function generateSeedRoomCycles(rooms: Room[]): RoomCycle[] {
+    const activeCycles = rooms.map(room => createActiveCycleFromRoom(room));
+    const now = new Date().toISOString();
+    const archived: RoomCycle[] = [
+        {
+            id: 'cycle-17J-archived-001',
+            property_id: DEFAULT_PROPERTY_ID,
+            room_id: '17J',
+            display_code: 'EX 17J',
+            scope: 'archived',
+            lifecycle_status: 'archived',
+            tenant_name: 'Former Guest',
+            check_in_at: null,
+            check_out_at: now,
+            archived_from_code: '17J',
+            migrated: false,
+            created_at: now,
+            updated_at: now,
+        },
+        {
+            id: 'cycle-8J-archived-001',
+            property_id: DEFAULT_PROPERTY_ID,
+            room_id: '8J',
+            display_code: 'EX 8J',
+            scope: 'archived',
+            lifecycle_status: 'archived',
+            tenant_name: 'Former Guest',
+            check_in_at: null,
+            check_out_at: now,
+            archived_from_code: '8J',
+            migrated: false,
+            created_at: now,
+            updated_at: now,
+        },
+    ];
+    return [...activeCycles, ...archived];
+}
+
 function generateSeedDocuments(): Document[] {
     const now = new Date().toISOString();
     const p = DEFAULT_PROPERTY_ID;
@@ -277,6 +384,7 @@ function generateSeedAuditLogs(documents: Document[], followups: Followup[]): Au
 
 function buildSeedStore(): StoreData {
     const rooms = generateRooms();
+    const roomCycles = generateSeedRoomCycles(rooms);
     const rawMessages = generateSeedMessages();
     const documents = generateSeedDocuments();
     const bookings = generateSeedBookings();
@@ -287,6 +395,7 @@ function buildSeedStore(): StoreData {
             ...message,
             property_id: DEFAULT_PROPERTY_ID,
             parsed_room: parsed.rooms,
+            parsed_room_refs: parsed.room_refs ?? parsed.rooms.map(buildActiveRoomRef),
             parsed_action: parsed.action,
             parsed_type: parsed.type,
             confidence: parsed.confidence,
@@ -295,6 +404,13 @@ function buildSeedStore(): StoreData {
                 : '規則引擎未能穩定判斷，需人工覆核。',
             parsed_by: 'rules' as ParseEngine,
             parsed_model: 'rule-engine',
+            upload_batch_id: null,
+            ai_classification: parsed.action
+                ? parsed.rooms.length > 0 ? 'actionable' as const : 'context' as const
+                : parsed.rooms.length > 0 ? 'review' as const : 'irrelevant' as const,
+            ai_classification_reason: parsed.action
+                ? '種子資料以規則判斷為可操作或背景訊息。'
+                : '種子資料缺乏穩定動作，先標記為覆核或無關。',
         };
     });
 
@@ -310,6 +426,7 @@ function buildSeedStore(): StoreData {
                 id: `ho-${handoffs.length + 1}`,
                 property_id: DEFAULT_PROPERTY_ID,
                 room_id: roomId,
+                room_cycle_id: resolveActiveRoomCycleId(roomCycles, roomId),
                 from_dept: parsed.from_dept,
                 to_dept: parsed.to_dept,
                 action: parsed.action || '',
@@ -342,13 +459,23 @@ function buildSeedStore(): StoreData {
         properties: seedProperties,
         users: seedUsers,
         rooms,
+        room_cycles: roomCycles,
         messages,
         handoffs,
-        documents,
-        bookings,
+        documents: documents.map(document => ({
+            ...document,
+            room_cycle_id: resolveActiveRoomCycleId(roomCycles, document.room_id, document.property_id),
+        })),
+        bookings: bookings.map(booking => ({
+            ...booking,
+            room_cycle_id: booking.room_id ? resolveActiveRoomCycleId(roomCycles, booking.room_id, booking.property_id) : null,
+        })),
         followups,
         parse_reviews: [],
         audit_logs: generateSeedAuditLogs(documents, followups),
+        upload_batches: [],
+        ai_batch_runs: [],
+        ai_extracted_events: [],
     };
 }
 
@@ -362,17 +489,20 @@ function getSeedStore(): StoreData {
 function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
     const seedStore = getSeedStore();
     const store = rawStore ?? seedStore;
+    const normalizedRooms = (store.rooms ?? seedStore.rooms).map(room => normalizeRoom({
+        ...room,
+        property_id: (room as Room).property_id ?? DEFAULT_PROPERTY_ID,
+        needs_attention: room.needs_attention ?? false,
+        attention_reason: room.attention_reason ?? null,
+        version: (room as Room).version ?? 1,
+    } as Room));
+    const normalizedRoomCycles = normalizeRoomCycles(normalizedRooms, store.room_cycles ?? seedStore.room_cycles);
 
     return {
         properties: store.properties ?? seedStore.properties,
         users: store.users ?? seedStore.users,
-        rooms: (store.rooms ?? seedStore.rooms).map(room => normalizeRoom({
-            ...room,
-            property_id: (room as Room).property_id ?? DEFAULT_PROPERTY_ID,
-            needs_attention: room.needs_attention ?? false,
-            attention_reason: room.attention_reason ?? null,
-            version: (room as Room).version ?? 1,
-        } as Room)),
+        rooms: normalizedRooms,
+        room_cycles: normalizedRoomCycles,
         messages: (store.messages ?? seedStore.messages).map(message => {
             const chatMeta = inferSeedChatMetadata(message.sender_name, message.raw_text);
             return {
@@ -388,14 +518,66 @@ function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
                 ),
                 parsed_by: (message.parsed_by ?? 'rules') as ParseEngine,
                 parsed_model: message.parsed_model ?? (message.parsed_by === 'review' ? 'human-review' : 'rule-engine'),
+                parsed_room_refs: normalizeMessageRoomRefs(message as Message),
+                upload_batch_id: message.upload_batch_id ?? null,
+                ai_classification: message.ai_classification ?? null,
+                ai_classification_reason: message.ai_classification_reason ?? null,
             };
         }),
-        handoffs: store.handoffs ?? seedStore.handoffs,
-        documents: store.documents ?? seedStore.documents,
-        bookings: store.bookings ?? seedStore.bookings,
-        followups: store.followups ?? seedStore.followups,
-        parse_reviews: store.parse_reviews ?? seedStore.parse_reviews,
+        handoffs: (store.handoffs ?? seedStore.handoffs).map(handoff => ({
+            ...handoff,
+            room_cycle_id: handoff.room_cycle_id ?? resolveActiveRoomCycleId(normalizedRoomCycles, handoff.room_id, handoff.property_id),
+            version: handoff.version ?? 1,
+        })),
+        documents: (store.documents ?? seedStore.documents).map(document => ({
+            ...document,
+            room_cycle_id: document.room_cycle_id ?? resolveActiveRoomCycleId(normalizedRoomCycles, document.room_id, document.property_id),
+            version: document.version ?? 1,
+        })),
+        bookings: (store.bookings ?? seedStore.bookings).map(booking => ({
+            ...booking,
+            room_cycle_id: booking.room_cycle_id ?? (booking.room_id ? resolveActiveRoomCycleId(normalizedRoomCycles, booking.room_id, booking.property_id) : null),
+        })),
+        followups: (store.followups ?? seedStore.followups).map(followup => ({
+            ...followup,
+            related_room_cycles: followup.related_room_cycles ?? followup.related_rooms.map(roomId =>
+                resolveActiveRoomCycleId(normalizedRoomCycles, roomId, followup.property_id)
+            ),
+            version: followup.version ?? 1,
+        })),
+        parse_reviews: (store.parse_reviews ?? seedStore.parse_reviews).map(review => ({
+            ...review,
+            room_cycle_ids: review.room_cycle_ids ?? review.reviewed_rooms.map(roomId =>
+                resolveActiveRoomCycleId(normalizedRoomCycles, roomId, review.property_id)
+            ),
+            version: review.version ?? 1,
+        })),
         audit_logs: store.audit_logs ?? seedStore.audit_logs,
+        upload_batches: (store.upload_batches ?? seedStore.upload_batches).map(batch => ({
+            ...batch,
+            ai_batch_run_id: batch.ai_batch_run_id ?? null,
+            summary_digest: batch.summary_digest ?? null,
+            updated_at: batch.updated_at ?? batch.created_at,
+        })),
+        ai_batch_runs: (store.ai_batch_runs ?? seedStore.ai_batch_runs).map(run => ({
+            ...run,
+            provider: run.provider ?? 'fallback',
+            model: run.model ?? null,
+            summary_digest: run.summary_digest ?? null,
+            error: run.error ?? null,
+            started_at: run.started_at ?? null,
+            completed_at: run.completed_at ?? null,
+            updated_at: run.updated_at ?? run.created_at,
+        })),
+        ai_extracted_events: (store.ai_extracted_events ?? seedStore.ai_extracted_events).map(event => ({
+            ...event,
+            room_ids: event.room_ids ?? [],
+            room_cycle_ids: event.room_cycle_ids ?? [],
+            room_display_codes: event.room_display_codes ?? event.room_ids ?? [],
+            evidence_message_ids: event.evidence_message_ids ?? [],
+            status: event.status ?? 'candidate',
+            updated_at: event.updated_at ?? event.created_at,
+        })),
     };
 }
 

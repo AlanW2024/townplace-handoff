@@ -51,6 +51,30 @@ export function canCloseFollowup(user: User, followupDept: DeptCode | null): Per
     return deny(action, '只有管理員、經理或相關部門人員可關閉跟進事項');
 }
 
+export function canEditFollowup(user: User, followupDept: DeptCode | null): Permission {
+    const action: PermissionAction = 'followup:edit';
+    if (user.role === 'admin') return allow(action);
+    if (user.role === 'manager') return allow(action);
+    if (user.role === 'operator' && isOwnDept(user, followupDept)) return allow(action);
+    return deny(action, '只有管理員、經理或相關部門人員可更新跟進事項');
+}
+
+export function canCreateBooking(user: User, bookingDept: DeptCode | null): Permission {
+    const action: PermissionAction = 'booking:create';
+    if (user.role === 'admin') return allow(action);
+    if (user.role === 'manager') return allow(action);
+    if (user.role === 'operator' && isOwnDept(user, bookingDept)) return allow(action);
+    return deny(action, '只有管理員、經理或相關部門人員可建立預約');
+}
+
+export function canIngestMessage(user: User): Permission {
+    const action: PermissionAction = 'message:ingest';
+    if (user.role === 'admin') return allow(action);
+    if (user.role === 'manager') return allow(action);
+    if (user.role === 'operator') return allow(action);
+    return deny(action, '只有管理員、經理或營運人員可匯入訊息');
+}
+
 export function canApproveReview(user: User): Permission {
     const action: PermissionAction = 'review:approve';
     if (user.role === 'admin') return allow(action);

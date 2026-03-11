@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { usePolling } from '@/hooks/usePolling';
 import {
-    Bell, RefreshCw, AlertTriangle, AlertCircle, Info, Home, Clock, ChevronDown, ChevronUp, ArrowRight
+    Bell, RefreshCw, AlertTriangle, AlertCircle, Info, Home, Clock, ArrowRight
 } from 'lucide-react';
 import Link from 'next/link';
 import { cn, formatDateTime } from '@/lib/utils';
@@ -107,7 +107,7 @@ export default function NotificationsPage() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState<FilterType>('all');
-    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [selectedId, setSelectedId] = useState<string | null>(null);
     const { showToast } = useToast();
 
     const fetchNotifications = useCallback(async () => {
@@ -133,10 +133,22 @@ export default function NotificationsPage() {
     };
 
     const filtered = filter === 'all' ? notifications : notifications.filter(n => n.level === filter);
+    const selectedNotification = filtered.find(notification => notification.id === selectedId) || filtered[0] || null;
 
     const criticalCount = notifications.filter(n => n.level === 'critical').length;
     const warningCount = notifications.filter(n => n.level === 'warning').length;
     const infoCount = notifications.filter(n => n.level === 'info').length;
+
+    useEffect(() => {
+        if (filtered.length === 0) {
+            setSelectedId(null);
+            return;
+        }
+
+        if (!filtered.some(notification => notification.id === selectedId)) {
+            setSelectedId(filtered[0].id);
+        }
+    }, [filtered, selectedId]);
 
     if (loading) {
         return (
@@ -210,99 +222,147 @@ export default function NotificationsPage() {
                     <p className="text-sm text-slate-400 mt-1">系統運作正常，沒有需要關注的事項</p>
                 </div>
             ) : (
-                <div className="grid gap-3">
-                    {filtered.map(notification => {
-                        const levelCfg = LEVEL_CONFIG[notification.level];
-                        const LevelIcon = levelCfg.icon;
-                        const deptInfo = notification.related_dept ? DEPT_INFO[notification.related_dept] : null;
-                        const target = getNotificationTarget(notification);
-                        const isExpanded = expandedId === notification.id;
-                        const visibleRooms = isExpanded
-                            ? notification.related_rooms
-                            : notification.related_rooms.slice(0, 5);
-                        const hiddenRoomCount = Math.max(notification.related_rooms.length - visibleRooms.length, 0);
+                <div className="scan-shell">
+                    <div className="scan-grid">
+                        {filtered.map(notification => {
+                            const levelCfg = LEVEL_CONFIG[notification.level];
+                            const deptInfo = notification.related_dept ? DEPT_INFO[notification.related_dept] : null;
+                            const isActive = selectedNotification?.id === notification.id;
 
-                        return (
-                            <div
-                                key={notification.id}
-                                className={cn(
-                                    'glass-card p-4 border-l-4',
-                                    levelCfg.border
-                                )}
-                            >
-                                <div className="flex items-start gap-3">
-                                    <LevelIcon size={16} className={cn('shrink-0 mt-0.5', levelCfg.color)} />
-                                    <div className="flex-1 min-w-0">
-                                        {/* Tags + Title */}
-                                        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                            <span className={cn('status-badge', levelCfg.bg, levelCfg.color)}>
-                                                {levelCfg.label}
-                                            </span>
-                                            <span className={cn('status-badge', TYPE_COLORS[notification.type])}>
-                                                {TYPE_LABELS[notification.type]}
-                                            </span>
+                            return (
+                                <button
+                                    key={notification.id}
+                                    type="button"
+                                    onClick={() => setSelectedId(notification.id)}
+                                    className={cn(
+                                        'scan-tile border-l-4',
+                                        levelCfg.border,
+                                        isActive && 'scan-tile-active'
+                                    )}
+                                >
+                                    <div className="space-y-3">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div className="flex gap-1.5 flex-wrap">
+                                                <span className={cn('scan-chip', levelCfg.bg, levelCfg.color)}>
+                                                    {levelCfg.label}
+                                                </span>
+                                                <span className={cn('scan-chip', TYPE_COLORS[notification.type])}>
+                                                    {TYPE_LABELS[notification.type]}
+                                                </span>
+                                            </div>
+                                            <span className="scan-kicker">通知</span>
+                                        </div>
+
+                                        <div>
+                                            <p className="scan-title scan-clamp-3">{notification.title}</p>
+                                            <p className="scan-body scan-clamp-4 mt-2">{notification.body}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <div className="scan-meta">
                                             {deptInfo && (
                                                 <span
-                                                    className="status-badge"
+                                                    className="scan-chip"
                                                     style={{ backgroundColor: deptInfo.lightColor, color: deptInfo.color }}
                                                 >
                                                     {deptInfo.name}
                                                 </span>
                                             )}
-                                        </div>
-
-                                        <h3 className="text-sm font-semibold text-slate-800 mb-0.5">{notification.title}</h3>
-                                        <p className="text-xs text-slate-500 leading-relaxed">{notification.body}</p>
-
-                                        {/* Rooms + Time */}
-                                        <div className="flex items-center gap-3 mt-2 flex-wrap">
                                             {notification.related_rooms.length > 0 && (
-                                                <span className="flex items-center gap-1 flex-wrap">
-                                                    <Home size={11} className="text-slate-400 shrink-0" />
-                                                    {visibleRooms.map(room => (
-                                                        <Link
-                                                            key={room}
-                                                            href={`/rooms?highlight=${room}`}
-                                                            className="text-[11px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-mono hover:bg-blue-100 hover:text-blue-700 transition-colors"
-                                                        >
-                                                            {room}
-                                                        </Link>
-                                                    ))}
-                                                    {hiddenRoomCount > 0 && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => setExpandedId(isExpanded ? null : notification.id)}
-                                                            className="text-[11px] px-1.5 py-0.5 bg-white text-blue-600 rounded border border-blue-100 hover:bg-blue-50 transition-colors flex items-center gap-1"
-                                                        >
-                                                            {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                                                            {isExpanded ? '收起' : `再顯示 ${hiddenRoomCount} 間`}
-                                                        </button>
-                                                    )}
+                                                <span className="scan-chip bg-slate-100 text-slate-600">
+                                                    {notification.related_rooms.length} 間房
                                                 </span>
                                             )}
-                                            <span className="flex items-center gap-1 text-[11px] text-slate-400">
-                                                <Clock size={10} />
+                                        </div>
+                                        <div className="scan-meta">
+                                            <span className="inline-flex items-center gap-1">
+                                                <Clock size={11} />
                                                 {formatDateTime(notification.created_at)}
                                             </span>
                                         </div>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
 
-                                        <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap">
-                                            <p className="text-[11px] text-slate-400">
-                                                由通知直接跳去相關頁面處理
-                                            </p>
-                                            <Link
-                                                href={target.href}
-                                                className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 hover:text-blue-800 transition-colors"
-                                            >
-                                                {target.label}
-                                                <ArrowRight size={12} />
-                                            </Link>
+                    {selectedNotification && (() => {
+                        const levelCfg = LEVEL_CONFIG[selectedNotification.level];
+                        const deptInfo = selectedNotification.related_dept ? DEPT_INFO[selectedNotification.related_dept] : null;
+                        const target = getNotificationTarget(selectedNotification);
+
+                        return (
+                            <div className="scan-detail">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <p className="scan-kicker">通知詳情</p>
+                                        <h2 className="text-xl font-bold text-slate-800 mt-2">{selectedNotification.title}</h2>
+                                    </div>
+                                    <span className={cn('status-badge', levelCfg.bg, levelCfg.color)}>
+                                        {levelCfg.label}
+                                    </span>
+                                </div>
+
+                                <div className="flex gap-2 flex-wrap mt-4">
+                                    <span className={cn('status-badge', TYPE_COLORS[selectedNotification.type])}>
+                                        {TYPE_LABELS[selectedNotification.type]}
+                                    </span>
+                                    {deptInfo && (
+                                        <span
+                                            className="status-badge"
+                                            style={{ backgroundColor: deptInfo.lightColor, color: deptInfo.color }}
+                                        >
+                                            {deptInfo.name}
+                                        </span>
+                                    )}
+                                </div>
+
+                                <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                                    <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-line">
+                                        {selectedNotification.body}
+                                    </p>
+                                </div>
+
+                                <div className="mt-5 space-y-3">
+                                    <div className="scan-meta">
+                                        <span className="inline-flex items-center gap-1">
+                                            <Clock size={12} />
+                                            {formatDateTime(selectedNotification.created_at)}
+                                        </span>
+                                    </div>
+
+                                    <div>
+                                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-[0.18em]">相關房間</p>
+                                        <div className="mt-2 flex gap-1.5 flex-wrap">
+                                            {selectedNotification.related_rooms.length > 0 ? selectedNotification.related_rooms.map(room => (
+                                                <Link
+                                                    key={room}
+                                                    href={`/rooms?highlight=${room}`}
+                                                    className="text-[11px] px-2 py-1 bg-slate-100 text-slate-600 rounded-md font-mono hover:bg-blue-100 hover:text-blue-700 transition-colors"
+                                                >
+                                                    {room}
+                                                </Link>
+                                            )) : (
+                                                <span className="text-sm text-slate-400">沒有指定房間</span>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
+
+                                <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+                                    <p className="text-xs text-slate-400">由右邊細看內容，再直接跳去相關頁面處理。</p>
+                                    <Link
+                                        href={target.href}
+                                        className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-700 hover:text-blue-800 transition-colors"
+                                    >
+                                        {target.label}
+                                        <ArrowRight size={14} />
+                                    </Link>
+                                </div>
                             </div>
                         );
-                    })}
+                    })()}
                 </div>
             )}
         </div>

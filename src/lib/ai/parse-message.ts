@@ -1,6 +1,6 @@
-import { DeptCode, HandoffType, ParseEngine, ParseResult } from '../types';
+import { DeptCode, HandoffType, ParseEngine, ParseResult, RoomReference } from '../types';
 import { parseWhatsAppMessage } from '../parser';
-import { analyzeHandoffSignal, extractRooms } from '../message-parsing';
+import { analyzeHandoffSignal, extractRoomRefs, extractRooms } from '../message-parsing';
 
 const VALID_TYPES: HandoffType[] = ['handoff', 'request', 'update', 'trigger', 'query', 'escalation'];
 const VALID_DEPTS: DeptCode[] = ['eng', 'conc', 'clean', 'hskp', 'mgmt', 'lease', 'comm', 'security'];
@@ -10,6 +10,17 @@ interface ParseWithAIInput {
     senderName?: string;
     senderDept?: DeptCode | null;
     chatName?: string | null;
+}
+
+export type ParseStrategy = 'auto' | 'rules_only';
+
+export interface ProviderConfig {
+    engine: 'anthropic' | 'openai' | 'openrouter';
+    model: string;
+    apiKey: string;
+    baseUrl?: string;
+    siteUrl?: string;
+    appName?: string;
 }
 
 function clampConfidence(value: unknown, fallback = 0.5): number {
@@ -47,7 +58,11 @@ function buildRuleExplanation(rawText: string, result: ParseResult): string {
     }
 }
 
-function getProviderConfig(): { engine: 'anthropic' | 'openai'; model: string; apiKey: string } | null {
+function normalizeBaseUrl(baseUrl: string): string {
+    return baseUrl.replace(/\/+$/, '');
+}
+
+export function getProviderConfig(): ProviderConfig | null {
     const anthropicKey = process.env.ANTHROPIC_API_KEY;
     if (anthropicKey) {
         return {
@@ -57,12 +72,25 @@ function getProviderConfig(): { engine: 'anthropic' | 'openai'; model: string; a
         };
     }
 
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+    if (openRouterKey) {
+        return {
+            engine: 'openrouter',
+            model: process.env.OPENROUTER_MODEL || 'openrouter/free',
+            apiKey: openRouterKey,
+            baseUrl: normalizeBaseUrl(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'),
+            siteUrl: process.env.OPENROUTER_SITE_URL || process.env.APP_URL || 'http://localhost:3000',
+            appName: process.env.OPENROUTER_APP_NAME || 'Townplace Handoff Local',
+        };
+    }
+
     const openaiKey = process.env.OPENAI_API_KEY;
     if (openaiKey) {
         return {
             engine: 'openai',
             model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
             apiKey: openaiKey,
+            baseUrl: normalizeBaseUrl(process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'),
         };
     }
 
@@ -91,6 +119,18 @@ function normalizeAIResult(rawResult: any, fallback: ParseResult): ParseResult {
             .filter((room: string, index: number, list: string[]) => list.indexOf(room) === index)
         : fallback.rooms;
 
+    const roomRefs: RoomReference[] = Array.isArray(rawResult?.room_refs)
+        ? rawResult.room_refs
+            .filter((ref: unknown) => typeof ref === 'object' && ref !== null)
+            .map((ref: any) => ({
+                physical_room_id: typeof ref.physical_room_id === 'string' ? ref.physical_room_id.toUpperCase().trim() : '',
+                display_code: typeof ref.display_code === 'string' ? ref.display_code.toUpperCase().replace(/\s+/g, ' ').trim() : '',
+                scope: ref.scope === 'archived' ? 'archived' : 'active',
+                raw_match: typeof ref.raw_match === 'string' ? ref.raw_match : '',
+            }))
+            .filter((ref: RoomReference) => /^\d{1,2}[A-M]$/.test(ref.physical_room_id) && ref.display_code.length > 0)
+        : fallback.room_refs ?? [];
+
     const type = typeof rawResult?.type === 'string' && VALID_TYPES.includes(rawResult.type)
         ? rawResult.type
         : fallback.type;
@@ -109,6 +149,7 @@ function normalizeAIResult(rawResult: any, fallback: ParseResult): ParseResult {
 
     return {
         rooms: rooms.length > 0 ? rooms : fallback.rooms,
+        room_refs: roomRefs.length > 0 ? roomRefs : fallback.room_refs,
         action,
         type,
         from_dept: fromDept,
@@ -140,6 +181,7 @@ function buildPrompt(input: ParseWithAIInput, fallback: ParseResult): string {
         '規則引擎初步結果（可參考但不要盲從）：',
         JSON.stringify({
             rooms: fallback.rooms,
+            room_refs: fallback.room_refs ?? [],
             action: fallback.action,
             type: fallback.type,
             from_dept: fallback.from_dept,
@@ -150,6 +192,7 @@ function buildPrompt(input: ParseWithAIInput, fallback: ParseResult): string {
         '請只輸出 JSON：',
         JSON.stringify({
             rooms: ['10F'],
+            room_refs: [{ physical_room_id: '10F', display_code: '10F', scope: 'active', raw_match: '10F' }],
             action: '工程完成 → 可清潔',
             type: 'handoff',
             from_dept: 'eng',
@@ -160,7 +203,7 @@ function buildPrompt(input: ParseWithAIInput, fallback: ParseResult): string {
     ].join('\n');
 }
 
-async function callAnthropic(prompt: string, model: string, apiKey: string): Promise<any> {
+async function callAnthropic(prompt: string, model: string, apiKey: string, systemPrompt?: string): Promise<any> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
 
@@ -176,6 +219,7 @@ async function callAnthropic(prompt: string, model: string, apiKey: string): Pro
                 model,
                 max_tokens: 700,
                 temperature: 0,
+                system: systemPrompt,
                 messages: [{ role: 'user', content: prompt }],
             }),
             signal: controller.signal,
@@ -198,25 +242,32 @@ async function callAnthropic(prompt: string, model: string, apiKey: string): Pro
     }
 }
 
-async function callOpenAI(prompt: string, model: string, apiKey: string): Promise<any> {
+async function callOpenAICompatible(prompt: string, provider: ProviderConfig, systemPrompt?: string): Promise<any> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
 
     try {
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        const headers: Record<string, string> = {
+            'content-type': 'application/json',
+            authorization: `Bearer ${provider.apiKey}`,
+        };
+
+        if (provider.engine === 'openrouter') {
+            if (provider.siteUrl) headers['HTTP-Referer'] = provider.siteUrl;
+            if (provider.appName) headers['X-OpenRouter-Title'] = provider.appName;
+        }
+
+        const response = await fetch(`${provider.baseUrl}/chat/completions`, {
             method: 'POST',
-            headers: {
-                'content-type': 'application/json',
-                authorization: `Bearer ${apiKey}`,
-            },
+            headers,
             body: JSON.stringify({
-                model,
+                model: provider.model,
                 temperature: 0,
                 response_format: { type: 'json_object' },
                 messages: [
                     {
                         role: 'system',
-                        content: '你是物業管理 WhatsApp 訊息解析器，只能輸出 JSON。',
+                        content: systemPrompt || '你是物業管理 WhatsApp 訊息解析器，只能輸出 JSON。',
                     },
                     {
                         role: 'user',
@@ -228,7 +279,7 @@ async function callOpenAI(prompt: string, model: string, apiKey: string): Promis
         });
 
         if (!response.ok) {
-            throw new Error(`OpenAI API failed: ${response.status}`);
+            throw new Error(`${provider.engine === 'openrouter' ? 'OpenRouter' : 'OpenAI'} API failed: ${response.status}`);
         }
 
         const data = await response.json();
@@ -239,7 +290,20 @@ async function callOpenAI(prompt: string, model: string, apiKey: string): Promis
     }
 }
 
-export async function parseMessageWithAI(input: ParseWithAIInput): Promise<ParseResult> {
+export async function callStructuredJsonModel(
+    prompt: string,
+    provider: ProviderConfig,
+    systemPrompt: string
+): Promise<any> {
+    return provider.engine === 'anthropic'
+        ? callAnthropic(prompt, provider.model, provider.apiKey, systemPrompt)
+        : callOpenAICompatible(prompt, provider, systemPrompt);
+}
+
+export async function parseMessageWithAI(
+    input: ParseWithAIInput,
+    options?: { strategy?: ParseStrategy }
+): Promise<ParseResult> {
     const ruleResult = parseWhatsAppMessage(input.rawText, input.senderName, input.senderDept || undefined);
     const fallback: ParseResult = {
         ...ruleResult,
@@ -247,6 +311,10 @@ export async function parseMessageWithAI(input: ParseWithAIInput): Promise<Parse
         engine: 'rules',
         model: 'rule-engine',
     };
+
+    if (options?.strategy === 'rules_only') {
+        return fallback;
+    }
 
     const provider = getProviderConfig();
     if (!provider) {
@@ -256,14 +324,15 @@ export async function parseMessageWithAI(input: ParseWithAIInput): Promise<Parse
     try {
         const prompt = buildPrompt(input, fallback);
         const rawAIResult = provider.engine === 'anthropic'
-            ? await callAnthropic(prompt, provider.model, provider.apiKey)
-            : await callOpenAI(prompt, provider.model, provider.apiKey);
+            ? await callAnthropic(prompt, provider.model, provider.apiKey, '你是物業管理 WhatsApp 訊息解析器，只能輸出 JSON。')
+            : await callOpenAICompatible(prompt, provider, '你是物業管理 WhatsApp 訊息解析器，只能輸出 JSON。');
 
         const normalized = normalizeAIResult(rawAIResult, fallback);
 
         return {
             ...normalized,
             rooms: normalized.rooms.length > 0 ? normalized.rooms : extractRooms(input.rawText),
+            room_refs: normalized.room_refs && normalized.room_refs.length > 0 ? normalized.room_refs : extractRoomRefs(input.rawText),
             engine: provider.engine as ParseEngine,
             model: provider.model,
         };

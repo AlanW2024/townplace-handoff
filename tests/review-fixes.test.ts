@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { withTempWorkspace, jsonRequest, isoNow, makeRoom } from './helpers';
+import { describe, expect, it, vi } from 'vitest';
+import { withTempWorkspace, jsonRequest, isoNow, makeRoom, waitFor } from './helpers';
 
 describe.sequential('Claude Review Fixes', () => {
     it('serializes concurrent store writes so both updates persist', async () => {
@@ -343,18 +343,123 @@ describe.sequential('Claude Review Fixes', () => {
             expect(response.status).toBe(200);
 
             const data = await response.json() as {
+                upload_batch_id: string;
+                ai_batch_run_id: string;
                 parsed_messages: number;
                 handoffs_created: number;
                 messages: Array<{ raw_text: string; parsed_action: string | null }>;
             };
 
             expect(data.parsed_messages).toBe(2);
-            expect(data.handoffs_created).toBe(1);
+            expect(data.handoffs_created).toBe(0);
             expect(data.messages.map(message => message.raw_text)).toEqual([
                 '10F 已完成，可清潔',
                 '23D 已完成油漆',
             ]);
             expect(data.messages[1].parsed_action).not.toBe('工程完成 → 可清潔');
+
+            const storeMod = await import('../src/lib/store');
+            await waitFor(() => {
+                const run = storeMod.getStore().ai_batch_runs.find(item => item.id === data.ai_batch_run_id);
+                return run?.status === 'completed';
+            });
+
+            const store = storeMod.getStore();
+            expect(store.upload_batches.some(batch => batch.id === data.upload_batch_id)).toBe(true);
+            expect(store.ai_batch_runs.some(run => run.id === data.ai_batch_run_id && run.status === 'completed')).toBe(true);
+            expect(store.ai_extracted_events.length).toBeGreaterThan(0);
+        });
+    });
+
+    it('keeps upload on fast rules-only path even when OpenRouter key exists', async () => {
+        await withTempWorkspace(async () => {
+            vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-test');
+            vi.stubEnv('OPENROUTER_MODEL', 'deepseek/deepseek-v3.2');
+
+            const fetchMock = vi.fn().mockRejectedValue(new Error('upload should not call external AI'));
+            const originalFetch = globalThis.fetch;
+            globalThis.fetch = fetchMock as typeof fetch;
+
+            try {
+                const { POST } = await import('../src/app/api/upload/route');
+                const text = [
+                    '03/11/26, 9:15 AM - Vic Lee: 10F 已完成，可清潔',
+                    '03/11/26, 9:18 AM - Vic Lee: 23D 已完成油漆',
+                ].join('\n');
+
+                const formData = new FormData();
+                formData.append('file', new File([text], 'WhatsApp Chat - Fast.txt', { type: 'text/plain' }));
+
+                const response = await POST(new Request('http://localhost/api/upload', {
+                    method: 'POST',
+                    body: formData,
+                }));
+
+                expect(response.status).toBe(200);
+                expect(fetchMock).not.toHaveBeenCalled();
+
+                const data = await response.json() as {
+                    messages: Array<{ parsed_by: string }>;
+                };
+
+                expect(data.messages.every(message => message.parsed_by === 'rules')).toBe(true);
+            } finally {
+                globalThis.fetch = originalFetch;
+                vi.unstubAllEnvs();
+            }
+        });
+    });
+
+    it('bulk upload keeps room-less chatter in messages without flooding pending review queue', async () => {
+        await withTempWorkspace(async () => {
+            const { POST } = await import('../src/app/api/upload/route');
+            const storeMod = await import('../src/lib/store');
+            const beforeStore = storeMod.getStore();
+            const beforeMessageCount = beforeStore.messages.length;
+            const beforeReviewCount = beforeStore.parse_reviews.length;
+            const text = [
+                '03/11/26, 9:15 AM - Vic Lee: FYI',
+                '03/11/26, 9:16 AM - Vic Lee: 10F 已完成，可清潔',
+                '03/11/26, 9:17 AM - Vic Lee: 想問問曹生果度點同佢講？',
+                '03/11/26, 9:18 AM - Vic Lee: 19C',
+            ].join('\n');
+
+            const formData = new FormData();
+            formData.append('file', new File([text], 'WhatsApp Chat - Bulk.txt', { type: 'text/plain' }));
+
+            const response = await POST(new Request('http://localhost/api/upload', {
+                method: 'POST',
+                body: formData,
+            }));
+
+            expect(response.status).toBe(200);
+
+            const data = await response.json() as {
+                upload_batch_id: string;
+                ai_batch_run_id: string;
+                parsed_messages: number;
+                messages: Array<{ raw_text: string; parsed_action: string | null }>;
+            };
+
+            expect(data.parsed_messages).toBe(4);
+            expect(data.messages.map(message => message.raw_text)).toEqual([
+                'FYI',
+                '10F 已完成，可清潔',
+                '想問問曹生果度點同佢講？',
+                '19C',
+            ]);
+
+            const store = storeMod.getStore();
+            expect(store.messages.length).toBe(beforeMessageCount + 4);
+            await waitFor(() => {
+                const latestStore = storeMod.getStore();
+                return latestStore.ai_batch_runs.some(run => run.id === data.ai_batch_run_id && run.status === 'completed');
+            });
+
+            const updatedStore = storeMod.getStore();
+            expect(updatedStore.parse_reviews.length).toBe(beforeReviewCount + 1);
+            expect(updatedStore.parse_reviews.at(-1)?.raw_text).toBe('19C');
+            expect(updatedStore.parse_reviews.some(review => review.raw_text === 'FYI')).toBe(false);
         });
     });
 });

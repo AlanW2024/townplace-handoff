@@ -55,3 +55,33 @@ export function roomNeedsAttention(
         room.lease_status === 'checkout'
     );
 }
+
+export function deriveRoomAttentionState(
+    room: Pick<Room, 'eng_status' | 'clean_status' | 'lease_status'>
+): { needs_attention: boolean; attention_reason: string | null } {
+    if (room.lease_status === 'checkout') {
+        return { needs_attention: true, attention_reason: '退房後待跟進' };
+    }
+
+    if (room.eng_status === 'pending') {
+        return { needs_attention: true, attention_reason: '待工程處理' };
+    }
+
+    if (room.eng_status === 'in_progress') {
+        return { needs_attention: true, attention_reason: '工程跟進中' };
+    }
+
+    if (room.clean_status === 'pending') {
+        return { needs_attention: true, attention_reason: '待清潔接手' };
+    }
+
+    if (room.clean_status === 'in_progress') {
+        return { needs_attention: true, attention_reason: '已安排清潔' };
+    }
+
+    if (room.lease_status === 'newlet') {
+        return { needs_attention: true, attention_reason: '入住前準備' };
+    }
+
+    return { needs_attention: false, attention_reason: null };
+}
