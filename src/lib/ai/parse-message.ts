@@ -1,6 +1,6 @@
 import { DeptCode, HandoffType, ParseEngine, ParseResult } from '../types';
 import { parseWhatsAppMessage } from '../parser';
-import { analyzeHandoffSignal, enforceHandoffSafety, extractRooms } from '../message-parsing';
+import { analyzeHandoffSignal, extractRooms } from '../message-parsing';
 
 const VALID_TYPES: HandoffType[] = ['handoff', 'request', 'update', 'trigger', 'query', 'escalation'];
 const VALID_DEPTS: DeptCode[] = ['eng', 'conc', 'clean', 'hskp', 'mgmt', 'lease', 'comm', 'security'];
@@ -260,11 +260,10 @@ export async function parseMessageWithAI(input: ParseWithAIInput): Promise<Parse
             : await callOpenAI(prompt, provider.model, provider.apiKey);
 
         const normalized = normalizeAIResult(rawAIResult, fallback);
-        const safeResult = enforceHandoffSafety(input.rawText, normalized, fallback);
 
         return {
-            ...safeResult,
-            rooms: safeResult.rooms.length > 0 ? safeResult.rooms : extractRooms(input.rawText),
+            ...normalized,
+            rooms: normalized.rooms.length > 0 ? normalized.rooms : extractRooms(input.rawText),
             engine: provider.engine as ParseEngine,
             model: provider.model,
         };

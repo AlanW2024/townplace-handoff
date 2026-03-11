@@ -3,32 +3,12 @@ import { analyzeHandoffSignal, extractRooms } from './message-parsing';
 import { ActionPatternConfig } from './policy/types';
 import { DEFAULT_ACTION_PATTERNS, DEFAULT_STAFF_DIRECTORY } from './policy/defaults';
 
-// ===========================
-// Staff → Department mapping
-// ===========================
-const STAFF_DEPT_MAP: Record<string, DeptCode> = {
-    '𝕋𝕒𝕟𝕃': 'eng', 'tanl': 'eng', 'vic lee': 'eng', 'vic': 'eng',
-    '𝕋𝕒𝕟𝕃.𝕊𝕚𝕝𝕒𝕤': 'eng',
-    'kaho': 'eng', 'g.a.r.y': 'eng', 'gary eng': 'eng',
-    'kaho tp soho': 'eng',
-    'wing哥': 'eng', 'wing': 'eng', '阿豪': 'eng',
-    'michael': 'conc', 'michael townplace': 'conc', 'josephine': 'conc', 'tp-josephine': 'conc', 'kelvin': 'conc', 'kelvin tpsoho': 'conc',
-    '艾倫黃': 'conc', 'renee': 'conc', 'renee tp soho': 'conc', 'gary': 'conc', 'concierge': 'conc', '[ concierge ] townplace soho': 'conc',
-    'ooo': 'hskp', '英姐': 'hskp', 'nana': 'hskp', '洛': 'hskp', 'lok': 'hskp', 'housekeeping': 'hskp',
-    'don ho': 'clean', 'don': 'clean', 'hugo': 'clean', '+852 9771 1310': 'clean',
-    'karen townplace': 'mgmt', 'karen chan soho': 'mgmt', 'karen chan': 'mgmt',
-    'karen': 'mgmt', 'alice': 'mgmt', 'tp-alice': 'mgmt', 'tp staff karen(duty)': 'mgmt',
-    'angel': 'lease', 'dennis': 'lease', 'cindy': 'lease', 'karen man': 'lease',
-    'karen lung': 'comm', 'eva': 'comm',
-    'eric': 'security',
-};
-
 const COMPLETION_REGEX = /(已?完成|done|完成咗)/i;
 const PROGRESS_WORK_REGEX = /(已調整|調整完成|已處理|處理完成|已安裝|安裝完成|已更換|更換完成|已修復|修復完成|回復正常|已吱膠|已打膠|logged)/i;
 const WORK_SCOPE_REGEX = /(油漆|門鉸|止回閥|掃口|熱水爐|安全掣|門柄|門手柄|牆身|天花|窗台|燈糟|大門|喉|閥|玻璃|床尾|膠|油|冷氣|爐|安裝|更換|調整|修補|修復|fix|logged)/i;
 const CONTINUATION_REGEX = /(明天|聽日|下週|下星期|再跟進|仲有|尚有|未完|未完成|差少少|等料|等待|繼續|需時|本週|下次|tomorrow|next week)/i;
 
-const STAFF_DEPT_ENTRIES = Object.entries(STAFF_DEPT_MAP).sort(
+const STAFF_DEPT_ENTRIES = Object.entries(DEFAULT_STAFF_DIRECTORY).sort(
     ([aliasA], [aliasB]) => aliasB.length - aliasA.length
 );
 
@@ -43,118 +23,13 @@ interface ActionPattern {
     to_dept?: DeptCode;
 }
 
-const ACTION_PATTERNS: ActionPattern[] = [
-    // Engineering completion → cleaning handoff
-    {
-        keywords: [/已?完成.*可清/, /完成[,，]?\s*可清/, /完成.*可清潔/, /可清潔/, /可清$/],
-        action: '工程完成 → 可清潔',
-        type: 'handoff',
-        from_dept: 'eng',
-        to_dept: 'clean',
-    },
-    // Deep clean completion
-    {
-        keywords: [/[Dd]eep\s*clean.*完成/, /深層清潔.*完成/],
-        action: '深層清潔完成',
-        type: 'update',
-        from_dept: 'clean',
-    },
-    // Cleaning completion
-    {
-        keywords: [/清潔完成/, /清潔.*完成/, /clean.*done/i, /clean.*完成/i],
-        action: '清潔完成',
-        type: 'update',
-        from_dept: 'clean',
-    },
-    // Maintenance request
-    {
-        keywords: [/執修/, /維修/, /repair/i],
-        action: '執修中',
-        type: 'update',
-        from_dept: 'conc',
-        to_dept: 'eng',
-    },
-    // Damage / maintenance issues
-    {
-        keywords: [/脫落/, /壞/, /漏水/, /滴水/, /損壞/, /爆/, /裂/],
-        action: '報修 — 需要維修',
-        type: 'request',
-        to_dept: 'eng',
-    },
-    // Check-out
-    {
-        keywords: [/[Cc]heck\s*out/, /退房/, /checkout/i],
-        action: '退房',
-        type: 'trigger',
-    },
-    // Check-in
-    {
-        keywords: [/[Cc]heck\s*in/, /入住/, /checkin/i, /有in/],
-        action: '入住',
-        type: 'trigger',
-    },
-    // Final inspection
-    {
-        keywords: [/[Ff]inal/, /最後檢查/],
-        action: 'Final 檢查',
-        type: 'update',
-    },
-    // Document related
-    {
-        keywords: [/DRF/i],
-        action: 'DRF 文件',
-        type: 'update',
-    },
-    {
-        keywords: [/TA/],
-        action: 'TA 文件',
-        type: 'update',
-    },
-    {
-        keywords: [/[Ss]urrender/],
-        action: 'Surrender 文件',
-        type: 'update',
-    },
-    {
-        keywords: [/[Ii]nventory/],
-        action: 'Inventory 文件',
-        type: 'update',
-    },
-    // Viewing / shooting
-    {
-        keywords: [/[Vv]iewing/, /睇樓/, /參觀/],
-        action: '預約睇樓',
-        type: 'trigger',
-        to_dept: 'lease',
-    },
-    // Silicone sealing
-    {
-        keywords: [/吱膠/, /打膠/],
-        action: '吱膠工程',
-        type: 'update',
-        from_dept: 'eng',
-    },
-    // General query about timeline
-    {
-        keywords: [/幾耐/, /幾時/, /要做幾/, /幾長時間/],
-        action: '查詢進度',
-        type: 'query',
-    },
-    // Acknowledgment
-    {
-        keywords: [/知了/, /收到/, /noted/i, /ok/i, /好的/],
-        action: '已確認',
-        type: 'update',
-    },
-    // Cleaning arrangement
-    {
-        keywords: [/清潔安排/, /吉房清潔/],
-        action: '清潔安排通知',
-        type: 'trigger',
-        from_dept: 'mgmt',
-        to_dept: 'clean',
-    },
-];
+const COMPILED_ACTION_PATTERNS: ActionPattern[] = DEFAULT_ACTION_PATTERNS.map(p => ({
+    keywords: p.keywords.map(k => new RegExp(k, 'i')),
+    action: p.action,
+    type: p.type,
+    from_dept: p.from_dept,
+    to_dept: p.to_dept,
+}));
 
 // ===========================
 // Main parser function
@@ -185,7 +60,7 @@ export function parseWhatsAppMessage(
             from_dept: p.from_dept,
             to_dept: p.to_dept,
         }))
-        : ACTION_PATTERNS;
+        : COMPILED_ACTION_PATTERNS;
 
     const hasQueryWords = /幾耐|幾時|邊個時間|哪個時間|時間方便|方便|\?|？/.test(normalizedText);
     const hasDamageWords = /脫落|壞|漏水|滴水|損壞|爆|裂/.test(normalizedText);

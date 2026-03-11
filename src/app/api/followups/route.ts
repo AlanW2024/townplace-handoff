@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getStore, withStoreWrite } from '@/lib/store';
 import { createAuditLog, getEntityAuditLogs, getLatestEntityAuditLog } from '@/lib/audit';
 import { AuditFieldChange, DeptCode, Followup, FollowupStatus } from '@/lib/types';
+import { parseJsonBody } from '@/lib/api-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +13,7 @@ const FOLLOWUP_STATUS_ORDER: Record<FollowupStatus, number> = {
     dismissed: 3,
 };
 const VALID_DEPTS: DeptCode[] = ['eng', 'conc', 'clean', 'hskp', 'mgmt', 'lease', 'comm', 'security'];
+const VALID_PRIORITIES = ['info', 'warning', 'urgent'] as const;
 
 function buildFollowupResponse(store: ReturnType<typeof getStore>) {
     return store.followups.map(followup => ({
@@ -30,7 +32,23 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-    const body = await request.json();
+    const parsed = await parseJsonBody<{
+        actor?: string;
+        reason?: string;
+        source_type?: string;
+        source_id?: string;
+        property_id?: string;
+        title?: string;
+        description?: string;
+        priority?: string;
+        assigned_dept?: string;
+        assigned_to?: string | null;
+        related_rooms?: string[];
+        due_at?: string | null;
+    }>(request);
+    if ('error' in parsed) return parsed.error;
+    const body = parsed.data;
+
     const actorName = typeof body.actor === 'string' ? body.actor.trim() : '';
     const actionReason = typeof body.reason === 'string' ? body.reason.trim() : '';
     const sourceType = body.source_type || 'manual';
@@ -43,8 +61,12 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: '手動建立跟進事項必須填寫原因' }, { status: 400 });
     }
 
-    if (body.assigned_dept && !VALID_DEPTS.includes(body.assigned_dept)) {
+    if (body.assigned_dept && !VALID_DEPTS.includes(body.assigned_dept as DeptCode)) {
         return NextResponse.json({ error: 'Invalid assigned_dept' }, { status: 400 });
+    }
+
+    if (body.priority !== undefined && !VALID_PRIORITIES.includes(body.priority as typeof VALID_PRIORITIES[number])) {
+        return NextResponse.json({ error: 'priority 必須是 info、warning 或 urgent' }, { status: 400 });
     }
 
     try {
@@ -64,10 +86,10 @@ export async function POST(request: Request) {
                 property_id: body.property_id || 'tp-soho',
                 title: body.title || '',
                 description: body.description || '',
-                source_type: sourceType,
+                source_type: sourceType as Followup['source_type'],
                 source_id: body.source_id || '',
-                priority: body.priority || 'info',
-                assigned_dept: body.assigned_dept || 'mgmt',
+                priority: (body.priority as Followup['priority']) || 'info',
+                assigned_dept: (body.assigned_dept as DeptCode) || 'mgmt',
                 assigned_to: body.assigned_to || null,
                 related_rooms: body.related_rooms || [],
                 status: 'open',
@@ -109,8 +131,18 @@ export async function POST(request: Request) {
 }
 
 export async function PUT(request: Request) {
-    const body = await request.json();
-    const { id, status, assigned_dept, assigned_to, due_at, actor, reason } = body;
+    const parsed = await parseJsonBody<{
+        id: string;
+        status?: string;
+        assigned_dept?: string;
+        assigned_to?: string;
+        due_at?: string;
+        actor?: string;
+        reason?: string;
+        expectedVersion?: number;
+    }>(request);
+    if ('error' in parsed) return parsed.error;
+    const { id, status, assigned_dept, assigned_to, due_at, actor, reason, expectedVersion } = parsed.data;
 
     const actorName = typeof actor === 'string' ? actor.trim() : '';
     const actionReason = typeof reason === 'string' ? reason.trim() : '';
@@ -122,7 +154,7 @@ export async function PUT(request: Request) {
     if (!actionReason) {
         return NextResponse.json({ error: '請填寫操作原因' }, { status: 400 });
     }
-    if (typeof assigned_dept !== 'undefined' && assigned_dept !== null && !VALID_DEPTS.includes(assigned_dept)) {
+    if (typeof assigned_dept !== 'undefined' && assigned_dept !== null && !VALID_DEPTS.includes(assigned_dept as DeptCode)) {
         return NextResponse.json({ error: 'Invalid assigned_dept' }, { status: 400 });
     }
 
@@ -134,6 +166,11 @@ export async function PUT(request: Request) {
             }
 
             const current = store.followups[idx];
+
+            if (expectedVersion !== undefined && expectedVersion !== current.version) {
+                throw new Error('版本衝突：此跟進事項已被其他人修改，請重新載入');
+            }
+
             const nextFollowup = { ...current };
             const changes: AuditFieldChange[] = [];
             let hasChange = false;
@@ -157,7 +194,7 @@ export async function PUT(request: Request) {
 
             if (typeof assigned_dept !== 'undefined' && assigned_dept !== current.assigned_dept) {
                 changes.push({ field: 'assigned_dept', from: current.assigned_dept, to: assigned_dept });
-                nextFollowup.assigned_dept = assigned_dept;
+                nextFollowup.assigned_dept = assigned_dept as DeptCode;
                 hasChange = true;
             }
             if (typeof assigned_to !== 'undefined' && assigned_to !== current.assigned_to) {
@@ -180,6 +217,7 @@ export async function PUT(request: Request) {
             }
 
             nextFollowup.updated_at = new Date().toISOString();
+            nextFollowup.version = (current.version || 1) + 1;
             store.followups[idx] = nextFollowup;
             store.audit_logs.push(createAuditLog({
                 entity_type: 'followup',
@@ -202,7 +240,7 @@ export async function PUT(request: Request) {
         return NextResponse.json(updated);
     } catch (error) {
         const message = error instanceof Error ? error.message : '更新失敗';
-        const statusCode = message === 'Followup not found' ? 404 : 400;
+        const statusCode = message === 'Followup not found' ? 404 : message.includes('版本衝突') ? 409 : 400;
         return NextResponse.json({ error: message }, { status: statusCode });
     }
 }

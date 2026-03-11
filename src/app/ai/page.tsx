@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { usePolling } from '@/hooks/usePolling';
 import { Lightbulb, RefreshCw, AlertTriangle, AlertCircle, Info, Home, ClipboardPlus, Check, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
@@ -95,8 +96,8 @@ export default function AIPage() {
             if (!fuRes.ok) throw new Error('載入跟進事項失敗');
             setSuggestions(await sugRes.json());
             setFollowups(await fuRes.json());
-        } catch (e: any) {
-            showToast(e.message || '載入失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -105,10 +106,7 @@ export default function AIPage() {
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
-    useEffect(() => {
-        const interval = setInterval(fetchData, 5000);
-        return () => clearInterval(interval);
-    }, [fetchData]);
+    usePolling(fetchData, 5000);
 
     const handleRefresh = () => {
         setRefreshing(true);
@@ -143,8 +141,8 @@ export default function AIPage() {
             if (!res.ok) throw new Error('建立失敗');
             showToast('已建立跟進事項', 'success');
             fetchData();
-        } catch (e: any) {
-            showToast(e.message || '建立跟進事項失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         } finally {
             setCreating(null);
         }

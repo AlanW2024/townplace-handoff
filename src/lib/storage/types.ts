@@ -1,5 +1,7 @@
 import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, AuditLog } from '../types';
 
+// Future work: this interface is reserved for a real database-backed repository.
+// The current app still reads and writes through store.ts directly.
 export interface Repository {
     // Rooms
     findRooms(propertyId: string): Promise<Room[]>;

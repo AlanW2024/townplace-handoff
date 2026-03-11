@@ -9,9 +9,10 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { cn, formatDateTime } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
+import AuditTrailComponent from '@/components/AuditTrail';
+import { usePolling } from '@/hooks/usePolling';
 import {
     AuditLog,
-    AUDIT_ACTION_LABELS,
     DeptCode,
     DEPT_INFO,
     Followup,
@@ -54,29 +55,6 @@ function sortFollowups(items: FollowupRecord[]): FollowupRecord[] {
     });
 }
 
-function AuditTrail({ logs }: { logs: AuditLog[] }) {
-    if (logs.length === 0) {
-        return <p className="text-xs text-slate-400">暫時未有操作記錄</p>;
-    }
-
-    return (
-        <div className="space-y-2">
-            {logs.slice(0, 3).map(log => (
-                <div key={log.id} className="text-xs text-slate-600 leading-relaxed">
-                    <p className="font-medium text-slate-700">
-                        {AUDIT_ACTION_LABELS[log.action]} · {log.actor}
-                        {log.from_status && log.to_status && log.from_status !== log.to_status && (
-                            <span className="text-slate-400"> · {STATUS_CONFIG[log.from_status as FollowupStatus]?.label || log.from_status} → {STATUS_CONFIG[log.to_status as FollowupStatus]?.label || log.to_status}</span>
-                        )}
-                    </p>
-                    <p className="mt-0.5 text-slate-500">原因：{log.reason}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">{formatDateTime(log.created_at)}</p>
-                </div>
-            ))}
-        </div>
-    );
-}
-
 function FollowupsPageContent() {
     const searchParams = useSearchParams();
     const [followups, setFollowups] = useState<FollowupRecord[]>([]);
@@ -105,8 +83,8 @@ function FollowupsPageContent() {
             const res = await fetch('/api/followups');
             if (!res.ok) throw new Error('載入失敗');
             setFollowups(await res.json());
-        } catch (e: any) {
-            showToast(e.message || '載入跟進事項失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '載入跟進事項失敗', 'error');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -115,10 +93,7 @@ function FollowupsPageContent() {
 
     useEffect(() => { fetchFollowups(); }, [fetchFollowups]);
 
-    useEffect(() => {
-        const interval = setInterval(fetchFollowups, 5000);
-        return () => clearInterval(interval);
-    }, [fetchFollowups]);
+    usePolling(fetchFollowups, 5000);
 
     useEffect(() => {
         const nextStatus = searchParams.get('status');
@@ -168,8 +143,8 @@ function FollowupsPageContent() {
             showToast(`已更新為「${STATUS_CONFIG[newStatus].label}」並記錄`, 'success');
             setActionReasons(prev => ({ ...prev, [id]: '' }));
             fetchFollowups();
-        } catch (e: any) {
-            showToast(e.message || '更新失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '更新失敗', 'error');
         } finally {
             setUpdating(null);
         }
@@ -520,7 +495,11 @@ function FollowupsPageContent() {
                                         <History size={13} />
                                         操作記錄
                                     </div>
-                                    <AuditTrail logs={followup.audit_logs} />
+                                    <AuditTrailComponent
+                                        logs={followup.audit_logs}
+                                        statusLabelFn={(s) => STATUS_CONFIG[s as FollowupStatus]?.label || s}
+                                        showContainer={false}
+                                    />
                                 </div>
                             </div>
                         );

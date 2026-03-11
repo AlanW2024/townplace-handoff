@@ -5,6 +5,8 @@
 
 import { getStore } from './store';
 import { DeptCode, DEPT_INFO, Document } from './types';
+import { NotificationThresholds } from './policy/types';
+import { DEFAULT_NOTIFICATION_THRESHOLDS } from './policy/defaults';
 
 export type NotificationType =
     | 'handoff_timeout'
@@ -41,9 +43,6 @@ const TYPE_LABELS: Record<NotificationType, string> = {
 };
 
 export { TYPE_LABELS };
-
-const BOOKING_CONFLICT_LOOKAHEAD_MS = 48 * 60 * 60 * 1000;
-const BOOKING_CONFLICT_GRACE_MS = 12 * 60 * 60 * 1000;
 
 function deptName(dept: DeptCode | null): string {
     if (!dept) return '相關部門';
@@ -97,7 +96,8 @@ function inferDocumentDept(document: Document): DeptCode | null {
     }
 }
 
-export function generateNotifications(): Notification[] {
+export function generateNotifications(t?: NotificationThresholds): Notification[] {
+    const thresholds = t ?? DEFAULT_NOTIFICATION_THRESHOLDS;
     const store = getStore();
     const now = Date.now();
     const notifications: Notification[] = [];
@@ -108,7 +108,7 @@ export function generateNotifications(): Notification[] {
     // Rule 1: Handoff timeout — aggregate by receiving department
     const pendingHandoffs = store.handoffs.filter(h => h.status === 'pending');
     const timedOutHandoffs = pendingHandoffs.filter(
-        h => now - new Date(h.created_at).getTime() >= 2 * 60 * 60 * 1000
+        h => now - new Date(h.created_at).getTime() >= thresholds.handoffTimeoutMs
     );
     const handoffGroups = new Map<DeptCode, typeof timedOutHandoffs>();
     for (const handoff of timedOutHandoffs) {
@@ -135,8 +135,8 @@ export function generateNotifications(): Notification[] {
 
     // Rule 2: Document overdue — aggregate by severity
     const activeDocuments = store.documents.filter(doc => doc.status !== 'completed');
-    const criticalDocs = activeDocuments.filter(doc => doc.days_outstanding > 5);
-    const warningDocs = activeDocuments.filter(doc => doc.days_outstanding > 3 && doc.days_outstanding <= 5);
+    const criticalDocs = activeDocuments.filter(doc => doc.days_outstanding > thresholds.docOverdueCriticalDays);
+    const warningDocs = activeDocuments.filter(doc => doc.days_outstanding > thresholds.docOverdueWarningDays && doc.days_outstanding <= thresholds.docOverdueCriticalDays);
     const pushDocumentNotifications = (documents: Document[], level: NotificationLevel) => {
         const grouped = new Map<string, Document[]>();
 
@@ -187,8 +187,8 @@ export function generateNotifications(): Notification[] {
         if (!booking.room_id) continue;
         const scheduledAt = new Date(booking.scheduled_at).getTime();
         if (Number.isNaN(scheduledAt)) continue;
-        if (scheduledAt - now > BOOKING_CONFLICT_LOOKAHEAD_MS) continue;
-        if (now - scheduledAt > BOOKING_CONFLICT_GRACE_MS) continue;
+        if (scheduledAt - now > thresholds.bookingConflictLookaheadMs) continue;
+        if (now - scheduledAt > thresholds.bookingConflictGraceMs) continue;
 
         const room = store.rooms.find(r => r.id === booking.room_id);
         if (!room) continue;
@@ -274,7 +274,7 @@ export function generateNotifications(): Notification[] {
     for (const followup of activeFollowups) {
         const dueTime = new Date(followup.due_at as string).getTime();
         const diff = dueTime - now;
-        if (diff > 24 * 60 * 60 * 1000) continue;
+        if (diff > thresholds.followupDueLookaheadMs) continue;
 
         const state = diff < 0 ? 'overdue' : 'soon';
         const groupKey = `${state}:${followup.assigned_dept}`;

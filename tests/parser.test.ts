@@ -175,6 +175,16 @@ describe('parseWhatsAppMessage', () => {
       const result = parseWhatsAppMessage('noted');
       expect(result.action).toBe('已確認');
     });
+
+    it('booking 不應匹配確認 pattern', () => {
+      const result = parseWhatsAppMessage('booking confirmed');
+      expect(result.action).not.toBe('已確認');
+    });
+
+    it('STATUS 不應匹配 TA pattern', () => {
+      const result = parseWhatsAppMessage('STATUS update');
+      expect(result.action).not.toBe('TA 文件');
+    });
   });
 
   // =========================================

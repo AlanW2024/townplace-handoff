@@ -5,6 +5,7 @@ import { analyzeHandoffSignal, enforceHandoffSafety, HandoffSignalAnalysis } fro
 import { StoreData, withStoreWrite } from './store';
 import { ReviewPolicy, RoomStatusRule } from './policy/types';
 import { DEFAULT_REVIEW_POLICY } from './policy/defaults';
+import { emitEvent } from './observability';
 
 // ===========================
 // Shared message ingestion logic
@@ -131,7 +132,7 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
     const isSummary = isSummaryMessage(input.raw_text, safeParsed);
     const ambiguousCompletion = isAmbiguousEngineeringCompletion(input.raw_text, safeParsed);
     const hasFutureHandoffLanguage = handoffSignal.hasExplicitPositiveHandoff && handoffSignal.hasFutureContext;
-    const needsReview = safeParsed.confidence < 0.75 || !safeParsed.action || isSummary || ambiguousCompletion || hasFutureHandoffLanguage;
+    const needsReview = shouldRequireReview(safeParsed, { isSummary, isAmbiguousCompletion: ambiguousCompletion, hasFutureHandoffLanguage });
     let review: ParseReview | null = null;
 
     if (needsReview) {
@@ -200,6 +201,14 @@ async function ingestMessageIntoStore(store: StoreData, input: IngestInput): Pro
             applyRoomStatusUpdate(room, safeParsed.action, effectFromDept || null, msg.sender_name);
         }
     }
+
+    emitEvent('message.ingested', 'info', {
+        messageId: msg.id,
+        rooms: safeParsed.rooms,
+        action: safeParsed.action,
+        needsReview,
+        handoffCount: handoffs.length,
+    });
 
     return { message: msg, handoffs, review };
 }

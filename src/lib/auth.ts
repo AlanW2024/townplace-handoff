@@ -49,3 +49,7 @@ export function setAuthProvider(provider: AuthProvider): void {
 export function getAuthProvider(): AuthProvider {
     return activeProvider;
 }
+
+export function isAuthenticated(cookieValue: string | undefined | null): boolean {
+    return cookieValue === 'authenticated';
+}

@@ -1,4 +1,4 @@
-import { DeptCode, Permission, PermissionAction, User, UserRole } from './types';
+import { DeptCode, Permission, PermissionAction, User } from './types';
 
 function allow(action: PermissionAction): Permission {
     return { action, allowed: true };
@@ -62,21 +62,4 @@ export function assertPermission(permission: Permission): void {
     if (!permission.allowed) {
         throw new Error(permission.reason || '權限不足');
     }
-}
-
-/**
- * Demo mode: returns a hardcoded admin user.
- * In production, this would extract the user from JWT/session.
- */
-export function getCurrentUser(_request?: Request): User {
-    return {
-        id: 'user-admin',
-        name: 'Admin',
-        email: 'admin@townplace.hk',
-        role: 'admin',
-        dept: null,
-        property_ids: ['tp-soho'],
-        is_active: true,
-        created_at: new Date().toISOString(),
-    };
 }

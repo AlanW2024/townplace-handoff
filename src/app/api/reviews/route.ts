@@ -3,6 +3,7 @@ import { StoreData, getStore, withStoreWrite } from '@/lib/store';
 import { applyRoomStatusUpdate } from '@/lib/ingest';
 import { analyzeHandoffSignal, enforceHandoffSafety } from '@/lib/message-parsing';
 import { DeptCode, Handoff, HandoffType, ParseReview, ReviewStatus } from '@/lib/types';
+import { parseJsonBody } from '@/lib/api-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,25 +50,28 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-    const body = await request.json();
+    const parsed = await parseJsonBody<Record<string, unknown>>(request);
+    if ('error' in parsed) return parsed.error;
+    const body = parsed.data;
+
     const now = new Date().toISOString();
 
     const review = await withStoreWrite(store => {
         const nextReview: ParseReview = {
             id: `rev-${Date.now()}`,
-            property_id: body.property_id || 'tp-soho',
-            message_id: body.message_id || '',
-            raw_text: body.raw_text || '',
-            sender_name: body.sender_name || '',
+            property_id: (body.property_id as string) || 'tp-soho',
+            message_id: (body.message_id as string) || '',
+            raw_text: (body.raw_text as string) || '',
+            sender_name: (body.sender_name as string) || '',
             sender_dept: validateDept(body.sender_dept) ? body.sender_dept : 'conc',
-            confidence: body.confidence ?? 0,
+            confidence: (body.confidence as number) ?? 0,
             suggested_rooms: Array.isArray(body.suggested_rooms) ? body.suggested_rooms : [],
-            suggested_action: body.suggested_action ?? null,
+            suggested_action: (body.suggested_action as string) ?? null,
             suggested_type: validateType(body.suggested_type) ? body.suggested_type : null,
             suggested_from_dept: validateDept(body.suggested_from_dept) ? body.suggested_from_dept : null,
             suggested_to_dept: validateDept(body.suggested_to_dept) ? body.suggested_to_dept : null,
             reviewed_rooms: Array.isArray(body.reviewed_rooms) ? body.reviewed_rooms : (Array.isArray(body.suggested_rooms) ? body.suggested_rooms : []),
-            reviewed_action: body.reviewed_action ?? body.suggested_action ?? null,
+            reviewed_action: (body.reviewed_action as string) ?? (body.suggested_action as string) ?? null,
             reviewed_type: validateType(body.reviewed_type) ? body.reviewed_type : (validateType(body.suggested_type) ? body.suggested_type : null),
             reviewed_from_dept: validateDept(body.reviewed_from_dept) ? body.reviewed_from_dept : (validateDept(body.suggested_from_dept) ? body.suggested_from_dept : null),
             reviewed_to_dept: validateDept(body.reviewed_to_dept) ? body.reviewed_to_dept : (validateDept(body.suggested_to_dept) ? body.suggested_to_dept : null),
@@ -87,8 +91,7 @@ export async function POST(request: Request) {
 }
 
 export async function PUT(request: Request) {
-    const body = await request.json();
-    const { id, review_status, reviewed_by, ...corrections } = body as {
+    const parsed = await parseJsonBody<{
         id: string;
         review_status: ReviewStatus;
         reviewed_by?: string;
@@ -97,7 +100,10 @@ export async function PUT(request: Request) {
         reviewed_type?: HandoffType | null;
         reviewed_from_dept?: DeptCode | null;
         reviewed_to_dept?: DeptCode | null;
-    };
+        expectedVersion?: number;
+    }>(request);
+    if ('error' in parsed) return parsed.error;
+    const { id, review_status, reviewed_by, expectedVersion, ...corrections } = parsed.data;
 
     if (!validateReviewStatus(review_status)) {
         return NextResponse.json({ error: 'Invalid review status' }, { status: 400 });
@@ -116,6 +122,10 @@ export async function PUT(request: Request) {
 
             const review = store.parse_reviews[idx];
             const now = new Date().toISOString();
+
+            if (expectedVersion !== undefined && expectedVersion !== review.version) {
+                throw new Error('版本衝突：此覆核已被其他人修改，請重新載入');
+            }
 
             if (review.review_status !== 'pending') {
                 throw new Error('此覆核已處理，不能重複 approve / correct');
@@ -156,6 +166,7 @@ export async function PUT(request: Request) {
             review.reviewed_by = reviewed_by || 'Admin';
             review.reviewed_at = now;
             review.updated_at = now;
+            review.version = (review.version || 1) + 1;
 
             if (review_status === 'approved' || review_status === 'corrected') {
                 const safeReviewed = enforceHandoffSafety(review.raw_text, {

@@ -66,7 +66,7 @@ export const DEFAULT_ACTION_PATTERNS: ActionPatternConfig[] = [
         type: 'update',
     },
     {
-        keywords: ['TA'],
+        keywords: ['\\bTA\\b'],
         action: 'TA 文件',
         type: 'update',
     },
@@ -98,7 +98,7 @@ export const DEFAULT_ACTION_PATTERNS: ActionPatternConfig[] = [
         type: 'query',
     },
     {
-        keywords: ['知了', '收到', 'noted', 'ok', '好的'],
+        keywords: ['知了', '收到', '\\bnoted\\b', '\\bok\\b', '好的'],
         action: '已確認',
         type: 'update',
     },
@@ -323,7 +323,22 @@ export const DEFAULT_POLICY: PolicyConfig = {
 // ===========================
 export function mergePolicy(partial: Partial<PolicyConfig>): PolicyConfig {
     return {
-        ...DEFAULT_POLICY,
-        ...partial,
+        actionPatterns: partial.actionPatterns ?? DEFAULT_POLICY.actionPatterns,
+        staffDirectory: partial.staffDirectory
+            ? { ...DEFAULT_POLICY.staffDirectory, ...partial.staffDirectory }
+            : DEFAULT_POLICY.staffDirectory,
+        handoffPolicy: partial.handoffPolicy
+            ? { ...DEFAULT_POLICY.handoffPolicy, ...partial.handoffPolicy }
+            : DEFAULT_POLICY.handoffPolicy,
+        reviewPolicy: partial.reviewPolicy
+            ? { ...DEFAULT_POLICY.reviewPolicy, ...partial.reviewPolicy }
+            : DEFAULT_POLICY.reviewPolicy,
+        documentPipeline: partial.documentPipeline
+            ? { ...DEFAULT_POLICY.documentPipeline, ...partial.documentPipeline }
+            : DEFAULT_POLICY.documentPipeline,
+        notificationThresholds: partial.notificationThresholds
+            ? { ...DEFAULT_POLICY.notificationThresholds, ...partial.notificationThresholds }
+            : DEFAULT_POLICY.notificationThresholds,
+        roomStatusRules: partial.roomStatusRules ?? DEFAULT_POLICY.roomStatusRules,
     };
 }

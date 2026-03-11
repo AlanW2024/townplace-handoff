@@ -3,6 +3,7 @@ import path from 'path';
 import { Room, Message, Handoff, Document, Booking, Followup, ParseReview, AuditLog, DeptCode, ChatType, ParseEngine, Property, User } from './types';
 import { createAuditLog } from './audit';
 import { parseWhatsAppMessage } from './parser';
+import { emitEvent } from './observability';
 
 export const DEFAULT_PROPERTY_ID = 'tp-soho';
 
@@ -117,14 +118,15 @@ function inferSeedChatMetadata(senderName: string, rawText: string): { chat_name
     return { chat_name: 'SOHO 前線🏡🧹🦫🐿️', chat_type: 'group' };
 }
 
-// Generate rooms: floors 3-32, units A-M (not all units on every floor)
+// Generate rooms: floors 6-31, units A-S (no I/O); floor 31 only has A-M
 function generateRooms(): Room[] {
     const rooms: Room[] = [];
-    const units = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M'];
-    const types = ['Studio', 'Studio', '1B', '1B', '1B', '2B', 'Studio', '1B', 'Studio', '1B', '2B', 'Studio'];
+    const allUnits = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S'];
+    const allTypes = ['Studio', 'Studio', '1B', '1B', '1B', '2B', 'Studio', '1B', 'Studio', '1B', '2B', 'Studio', '1B', 'Studio', '1B', '1B', '2B'];
     const seededAt = new Date().toISOString();
 
-    for (let floor = 3; floor <= 32; floor++) {
+    for (let floor = 6; floor <= 31; floor++) {
+        const units = floor === 31 ? allUnits.slice(0, 12) : allUnits;
         for (let i = 0; i < units.length; i++) {
             const id = `${floor}${units[i]}`;
             rooms.push({
@@ -132,7 +134,7 @@ function generateRooms(): Room[] {
                 property_id: DEFAULT_PROPERTY_ID,
                 floor,
                 unit_letter: units[i],
-                room_type: types[i],
+                room_type: allTypes[i],
                 eng_status: 'n_a',
                 clean_status: 'n_a',
                 lease_status: (floor + i) % 3 === 0 ? 'vacant' : 'occupied',
@@ -162,7 +164,7 @@ function generateRooms(): Room[] {
         '25B': { eng_status: 'pending', clean_status: 'n_a', lease_status: 'occupied', last_updated_by: 'Concierge', needs_attention: true, attention_reason: '待工程處理' },
         '22C': { eng_status: 'in_progress', clean_status: 'n_a', lease_status: 'vacant', last_updated_by: 'Concierge', needs_attention: true, attention_reason: '待回覆進度' },
         '29E': { eng_status: 'in_progress', clean_status: 'n_a', lease_status: 'occupied', last_updated_by: 'Concierge', needs_attention: true, attention_reason: '待回覆進度' },
-        '3M': { eng_status: 'n_a', clean_status: 'completed', lease_status: 'newlet', last_updated_by: 'Don Ho' },
+        '6M': { eng_status: 'n_a', clean_status: 'completed', lease_status: 'newlet', last_updated_by: 'Don Ho' },
         '17J': { eng_status: 'n_a', clean_status: 'n_a', lease_status: 'checkout', last_updated_by: 'Concierge', needs_attention: true, attention_reason: '退房後待跟進' },
         '8J': { eng_status: 'n_a', clean_status: 'n_a', lease_status: 'checkout', last_updated_by: 'Concierge', needs_attention: true, attention_reason: '退房後待跟進' },
         '31K': { eng_status: 'completed', clean_status: 'n_a', lease_status: 'occupied', last_updated_by: '𝕋𝕒𝕟𝕃' },
@@ -188,9 +190,9 @@ function generateSeedMessages(): Omit<Message, 'parsed_room' | 'parsed_action' |
         { sender_name: 'Concierge', sender_dept: 'conc' as DeptCode, raw_text: '22C個工程要做幾耐，我哋可以試下約客', mins: 150 },
         { sender_name: '𝕋𝕒𝕟𝕃', sender_dept: 'eng' as DeptCode, raw_text: '19C完成可清', mins: 180 },
         { sender_name: 'Concierge', sender_dept: 'conc' as DeptCode, raw_text: '單位29E，維修大約搞幾耐?同幾時乾曬可以沖涼?', mins: 200 },
-        { sender_name: 'Don Ho', sender_dept: 'clean' as DeptCode, raw_text: '3M Deep clean完成', mins: 240 },
+        { sender_name: 'Don Ho', sender_dept: 'clean' as DeptCode, raw_text: '6M Deep clean完成', mins: 240 },
         { sender_name: 'Karen', sender_dept: 'mgmt' as DeptCode, raw_text: '吉房清潔安排，FYI', mins: 270 },
-        { sender_name: 'Karen', sender_dept: 'mgmt' as DeptCode, raw_text: '3M 1/10有in，leasing send咗email但係我哋收唔到', mins: 300 },
+        { sender_name: 'Karen', sender_dept: 'mgmt' as DeptCode, raw_text: '6M 1/10有in，leasing send咗email但係我哋收唔到', mins: 300 },
         { sender_name: 'Concierge', sender_dept: 'conc' as DeptCode, raw_text: '是日跟進 17 Jul 25\n- 17J已Check out\n- 8J已做Final\n- 31K工程部已調整大門鉸，回復正常(Logged)', mins: 330 },
         { sender_name: 'Kaho', sender_dept: 'hskp' as DeptCode, raw_text: 'House keep 知了', mins: 350 },
         { sender_name: '𝕋𝕒𝕟𝕃', sender_dept: 'eng' as DeptCode, raw_text: '盡做', mins: 355 },
@@ -324,8 +326,8 @@ function buildSeedStore(): StoreData {
         id: DEFAULT_PROPERTY_ID,
         name: 'TOWNPLACE SOHO',
         address: '16 Queens Road West, Hong Kong',
-        floors: { min: 3, max: 32 },
-        units: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M'],
+        floors: { min: 6, max: 31 },
+        units: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S'],
         created_at: new Date().toISOString(),
     }];
 
@@ -435,6 +437,7 @@ export async function withStoreWrite<T>(mutator: (store: StoreData) => Promise<T
             const store = getStore();
             const result = await mutator(store);
             saveStore(store);
+            emitEvent('store.write', 'info', { mutatorName: mutator.name || 'anonymous' });
             return result;
         } finally {
             releaseLock();

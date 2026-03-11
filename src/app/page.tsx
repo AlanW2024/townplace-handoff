@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { usePolling } from '@/hooks/usePolling';
 import {
     MessageSquare, ArrowRightLeft, Send, AlertTriangle, Brain, MessagesSquare, Phone, ShieldCheck
 } from 'lucide-react';
@@ -234,8 +235,8 @@ export default function DashboardPage() {
             const [msgs, hos] = await Promise.all([msgRes.json(), hoRes.json()]);
             setMessages(msgs);
             setHandoffs(hos);
-        } catch (e: any) {
-            showToast(e.message || '載入資料失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         } finally {
             setLoading(false);
         }
@@ -243,10 +244,7 @@ export default function DashboardPage() {
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
-    useEffect(() => {
-        const interval = setInterval(fetchData, 5000);
-        return () => clearInterval(interval);
-    }, [fetchData]);
+    usePolling(fetchData, 5000);
 
     const filteredMessages = useMemo(() => {
         switch (centerFilter) {
@@ -280,8 +278,8 @@ export default function DashboardPage() {
             setNewMessage('');
             showToast('訊息已匯入訊息中心', 'success');
             fetchData();
-        } catch (e: any) {
-            showToast(e.message || '發送訊息失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         }
     };
 
@@ -295,8 +293,8 @@ export default function DashboardPage() {
             if (!res.ok) throw new Error('確認失敗');
             showToast('交接已確認', 'success');
             fetchData();
-        } catch (e: any) {
-            showToast(e.message || '確認失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         }
     };
 

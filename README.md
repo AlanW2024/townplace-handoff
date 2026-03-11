@@ -255,7 +255,7 @@ flowchart LR
 - **Frontend**：Next.js 14, React 18, TypeScript
 - **Styling**：Tailwind CSS
 - **UI Icon**：Lucide React
-- **Current Storage**：`.demo-store.json`（已有 Repository 介面抽象，可替換為 Postgres）
+- **Current Storage**：`.demo-store.json`（目前仍是主線唯一儲存實作）
 - **AI Parser**：
   - Anthropic Messages API（可選）
   - OpenAI Chat Completions API（可選）
@@ -263,25 +263,30 @@ flowchart LR
 - **Policy Engine**：可配置策略引擎（`src/lib/policy/`）— 業務規則、閾值、部門映射全部可外部配置
 - **Permissions**：RBAC 權限模型（`src/lib/permissions.ts`）— admin / manager / operator / viewer 四級角色
 - **Auth**：認證抽象層（`src/lib/auth.ts`）— 目前為 demo login gate，可替換為 JWT
-- **Storage Abstraction**：Repository 模式（`src/lib/storage/`）— 為生產資料庫遷移鋪路
+- **Database Future Work**：`src/lib/storage/` 目前只保留作為未來資料庫遷移草稿，不是現行主線架構
 - **Observability**：可觀測性 hook（`src/lib/observability.ts`）— 結構化事件記錄
-- **Testing**：Vitest — 182 個測試，覆蓋 parser、ingest、audit、document pipeline、followup、review lifecycle、policy、permissions
+- **Testing**：Vitest — 235 個測試覆蓋 15 個檔案（parser、ingest、audit、document pipeline、followup、review lifecycle、policy、permissions、notifications、suggestions、store、API validation、handoffs route）
 
 ---
 
 ## 系統升級亮點
 
-### 測試覆蓋（182 個測試）
-- `tests/parser.test.ts` — 32 個：WhatsApp 訊息解析、部門映射
+### 測試覆蓋（235 個測試，15 個檔案）
+- `tests/parser.test.ts` — 34 個：WhatsApp 訊息解析、部門映射、word boundary 回歸
 - `tests/message-parsing.test.ts` — 27 個：房號提取、handoff 信號分析、安全閘門
 - `tests/ingest.test.ts` — 36 個：房態更新、summary 偵測、整合流程
 - `tests/audit.test.ts` — 7 個：審計日誌建立與查詢
 - `tests/document-pipeline.test.ts` — 15 個：文件推進/退回/驗證
 - `tests/followup-states.test.ts` — 13 個：跟進事項狀態轉換
 - `tests/review-lifecycle.test.ts` — 12 個：覆核批准/修正/衝突偵測
-- `tests/policy.test.ts` — 12 個：策略引擎回歸保護 + 自訂策略
-- `tests/permissions.test.ts` — 23 個：RBAC 權限矩陣
-- `tests/review-fixes.test.ts` — 5 個：原有整合測試
+- `tests/policy.test.ts` — 12 個：策略引擎回歸保護 + 自訂策略 + 深度合併
+- `tests/permissions.test.ts` — 24 個：RBAC 權限矩陣 + isAuthenticated
+- `tests/review-fixes.test.ts` — 5 個：跨模組整合測試
+- `tests/notifications.test.ts` — 13 個：handoff timeout、doc overdue、booking conflict、自訂閾值
+- `tests/suggestions.test.ts` — 11 個：分析器觸發、notification overlap 抑制
+- `tests/store.test.ts` — 8 個：normalizeStore、seed data、持久化、reset
+- `tests/api-validation.test.ts` — 8 個：無效 JSON、priority enum、版本衝突
+- `tests/handoffs-route.test.ts` — 10 個：轉移矩陣、actor/reason、audit logging、版本遞增
 
 ### 策略引擎（`src/lib/policy/`）
 業務規則從散落的 parser/ingest/notifications 中抽取到獨立策略層：
@@ -298,7 +303,7 @@ flowchart LR
 - RBAC 權限函式：`canChangeRoomStatus`、`canApproveHandoff`、`canEditDocument` 等
 
 ### 生產強化抽象
-- **Repository 模式**（`src/lib/storage/`）— 將 JSON store 包裝為標準介面
+- **Database 遷移草稿**（`src/lib/storage/`）— 保留作為未來 Postgres/SQL 遷移方向，現階段未接入主線 route/service
 - **認證抽象**（`src/lib/auth.ts`）— `AuthProvider` 介面 + `DemoAuthProvider`
 - **可觀測性**（`src/lib/observability.ts`）— 結構化事件 hook
 
@@ -309,12 +314,12 @@ flowchart LR
 這個版本仍然不是：
 
 - 真實 WhatsApp realtime bridge
-- 正式多人資料庫（但已有 Repository 介面可替換）
+- 正式多人資料庫（`src/lib/storage/` 仍只是未來資料庫遷移草稿）
 - production-ready deployment
 
 它現在是：
 
-**有 182 個測試保護、有策略引擎、有權限模型、有生產遷移路徑的可展示 prototype。**
+**有 235 個測試保護、有策略引擎、有權限模型，並且已把資料庫遷移與設計對照頁面清楚隔離的可展示 prototype。**
 
 ---
 
@@ -393,7 +398,7 @@ npm run start
 - `/src/lib/policy/defaults.ts` — 預設策略值
 - `/src/lib/permissions.ts` — RBAC 權限檢查
 - `/src/lib/auth.ts` — 認證抽象層
-- `/src/lib/storage/` — Repository 模式儲存抽象
+- `/src/lib/storage/` — future database work 草稿（未接入主線）
 - `/src/lib/observability.ts` — 可觀測性 hook
 
 ### API
@@ -413,10 +418,12 @@ npm run start
 - `/src/app/followups/page.tsx`
 - `/src/app/notifications/page.tsx`
 - `/src/app/rooms/page.tsx`
+- `/src/app/gemini/` — 純設計實驗場，用來比較 Gemini 版前端風格；不會寫入正式資料
 
 ### 測試
 
-- `/tests/parser.test.ts` — 訊息解析 + 部門映射
+- `/tests/helpers.ts` — 共用測試工具（`withTempWorkspace`、`jsonRequest`、`isoNow`、`makeRoom`）
+- `/tests/parser.test.ts` — 訊息解析 + 部門映射 + word boundary 回歸
 - `/tests/message-parsing.test.ts` — 房號提取 + handoff 信號
 - `/tests/ingest.test.ts` — 攝入管線 + 房態更新
 - `/tests/audit.test.ts` — 審計日誌
@@ -424,8 +431,13 @@ npm run start
 - `/tests/followup-states.test.ts` — 跟進事項狀態
 - `/tests/review-lifecycle.test.ts` — 覆核生命週期
 - `/tests/policy.test.ts` — 策略引擎
-- `/tests/permissions.test.ts` — RBAC 權限
-- `/tests/review-fixes.test.ts` — 原有整合測試
+- `/tests/permissions.test.ts` — RBAC 權限 + isAuthenticated
+- `/tests/review-fixes.test.ts` — 跨模組整合測試
+- `/tests/notifications.test.ts` — 通知引擎（handoff timeout、doc overdue 等）
+- `/tests/suggestions.test.ts` — 建議引擎（overlap 抑制）
+- `/tests/store.test.ts` — Store 持久化與正規化
+- `/tests/api-validation.test.ts` — API 輸入驗證
+- `/tests/handoffs-route.test.ts` — Handoffs 路由加固
 
 ### 文件
 
@@ -437,7 +449,7 @@ npm run start
 
 ## 已知限制
 
-- `.demo-store.json` 不適合多人同時寫入（已有 Repository 介面，可遷移至 Postgres）
+- `.demo-store.json` 不適合多人同時寫入；`src/lib/storage/` 目前只是 future work 草稿，尚未提供真正資料庫交易能力
 - auth 仍是 demo gate，不是真正 user identity（已有 `AuthProvider` 抽象，可替換為 JWT）
 - documents / followups 的 `操作人` 目前是頁面輸入欄，不是正式登入身份
 - notifications 雖已聚合，但仍未是 persisted alert lifecycle

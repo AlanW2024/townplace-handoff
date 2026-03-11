@@ -9,6 +9,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { cn, formatDateTime } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
+import { usePolling } from '@/hooks/usePolling';
 import { DeptCode, DEPT_INFO, HandoffType, ReviewStatus } from '@/lib/types';
 
 interface ParseReviewItem {
@@ -74,6 +75,8 @@ const DEPT_OPTIONS: { value: DeptCode; label: string }[] = Object.entries(DEPT_I
 
 type FilterType = 'all' | ReviewStatus;
 
+const OPERATOR_STORAGE_KEY = 'tpsoho-operator-name';
+
 function ReviewsPageContent() {
     const searchParams = useSearchParams();
     const [reviews, setReviews] = useState<ParseReviewItem[]>([]);
@@ -82,7 +85,19 @@ function ReviewsPageContent() {
     const [filter, setFilter] = useState<FilterType>('all');
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [updating, setUpdating] = useState<string | null>(null);
+    const [operatorName, setOperatorName] = useState('');
     const { showToast } = useToast();
+
+    useEffect(() => {
+        const saved = window.localStorage.getItem(OPERATOR_STORAGE_KEY);
+        if (saved) setOperatorName(saved);
+    }, []);
+
+    useEffect(() => {
+        if (operatorName.trim()) {
+            window.localStorage.setItem(OPERATOR_STORAGE_KEY, operatorName.trim());
+        }
+    }, [operatorName]);
 
     // Editable fields for correction
     const [editRooms, setEditRooms] = useState('');
@@ -96,8 +111,8 @@ function ReviewsPageContent() {
             const res = await fetch('/api/reviews');
             if (!res.ok) throw new Error('載入失敗');
             setReviews(await res.json());
-        } catch (e: any) {
-            showToast(e.message || '載入覆核項目失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '載入覆核項目失敗', 'error');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -106,10 +121,7 @@ function ReviewsPageContent() {
 
     useEffect(() => { fetchReviews(); }, [fetchReviews]);
 
-    useEffect(() => {
-        const interval = setInterval(fetchReviews, 5000);
-        return () => clearInterval(interval);
-    }, [fetchReviews]);
+    usePolling(fetchReviews, 5000);
 
     useEffect(() => {
         const nextStatus = searchParams.get('status');
@@ -144,7 +156,7 @@ function ReviewsPageContent() {
             const payload: any = {
                 id: reviewId,
                 review_status: action,
-                reviewed_by: 'Admin',
+                reviewed_by: operatorName || 'Admin',
             };
 
             if (action === 'corrected') {
@@ -166,8 +178,8 @@ function ReviewsPageContent() {
             showToast(`已更新為「${statusLabel}」`, 'success');
             setExpandedId(null);
             fetchReviews();
-        } catch (e: any) {
-            showToast(e.message || '操作失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         } finally {
             setUpdating(null);
         }
@@ -204,6 +216,18 @@ function ReviewsPageContent() {
                     <RefreshCw size={14} className={cn(refreshing && 'animate-spin')} />
                     重新整理
                 </button>
+            </div>
+
+            {/* Operator Name */}
+            <div className="glass-card p-4 bg-blue-50/70 border border-blue-100">
+                <label className="text-sm font-semibold text-slate-700 block mb-2">操作人</label>
+                <input
+                    value={operatorName}
+                    onChange={event => setOperatorName(event.target.value)}
+                    placeholder="例如：Michael / Karen / Duty Phone"
+                    className="w-full lg:max-w-sm rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                />
+                <p className="text-xs text-slate-400 mt-2">批准、修正、略過都會記錄這個操作人。</p>
             </div>
 
             {/* Stats */}

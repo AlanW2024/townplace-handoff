@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { usePolling } from '@/hooks/usePolling';
 import { Calendar, MapPin, Clock, AlertTriangle } from 'lucide-react';
 import { Booking, DEPT_INFO } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -28,15 +29,12 @@ export default function BookingsPage() {
             if (!res.ok) throw new Error('載入失敗');
             setBookings(await res.json());
         }
-        catch (e: any) { showToast(e.message || '載入預約失敗', 'error'); }
+        catch (e: unknown) { showToast(e instanceof Error ? e.message : '操作失敗', 'error'); }
         finally { setLoading(false); }
     }, [showToast]);
     useEffect(() => { fetch_(); }, [fetch_]);
 
-    useEffect(() => {
-        const interval = setInterval(fetch_, 5000);
-        return () => clearInterval(interval);
-    }, [fetch_]);
+    usePolling(fetch_, 5000);
 
     const grouped = bookings.reduce<Record<string, Booking[]>>((a, b) => {
         const k = new Date(b.scheduled_at).toLocaleDateString('zh-HK', { year: 'numeric', month: 'long', day: 'numeric' });

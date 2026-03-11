@@ -34,8 +34,8 @@ export default function UploadPage() {
             if (!res.ok) throw new Error('上傳失敗');
             const data = await res.json();
             setResult(data);
-        } catch (e: any) {
-            setError(e.message || '上傳失敗');
+        } catch (e: unknown) {
+            setError(e instanceof Error ? e.message : '操作失敗');
         } finally {
             setUploading(false);
         }

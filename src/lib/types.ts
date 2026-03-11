@@ -16,7 +16,7 @@ export type BookingType = 'viewing' | 'shooting' | 'event' | 'tenant_booking';
 export type FollowupStatus = 'open' | 'in_progress' | 'done' | 'dismissed';
 export type FollowupSourceType = 'suggestion' | 'manual';
 export type ParseEngine = 'rules' | 'anthropic' | 'openai' | 'review';
-export type AuditEntityType = 'document' | 'followup';
+export type AuditEntityType = 'document' | 'followup' | 'handoff';
 export type AuditAction = 'created' | 'status_advanced' | 'status_reverted' | 'status_changed' | 'field_updated';
 
 export interface AuditFieldChange {

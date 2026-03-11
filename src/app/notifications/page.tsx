@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { usePolling } from '@/hooks/usePolling';
 import {
     Bell, RefreshCw, AlertTriangle, AlertCircle, Info, Home, Clock, ChevronDown, ChevronUp, ArrowRight
 } from 'lucide-react';
@@ -114,8 +115,8 @@ export default function NotificationsPage() {
             const res = await fetch('/api/notifications');
             if (!res.ok) throw new Error('載入失敗');
             setNotifications(await res.json());
-        } catch (e: any) {
-            showToast(e.message || '載入通知失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -124,10 +125,7 @@ export default function NotificationsPage() {
 
     useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
 
-    useEffect(() => {
-        const interval = setInterval(fetchNotifications, 5000);
-        return () => clearInterval(interval);
-    }, [fetchNotifications]);
+    usePolling(fetchNotifications, 5000);
 
     const handleRefresh = () => {
         setRefreshing(true);

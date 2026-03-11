@@ -1,10 +1,18 @@
 import { NextResponse } from 'next/server';
 import { getStore, withStoreWrite } from '@/lib/store';
-import { HandoffStatus } from '@/lib/types';
+import { createAuditLog } from '@/lib/audit';
+import { AuditFieldChange, HandoffStatus } from '@/lib/types';
+import { parseJsonBody } from '@/lib/api-utils';
 
 export const dynamic = 'force-dynamic';
 
 const VALID_HANDOFF_STATUSES: HandoffStatus[] = ['pending', 'acknowledged', 'completed'];
+
+const HANDOFF_TRANSITIONS: Record<HandoffStatus, HandoffStatus[]> = {
+    pending: ['acknowledged', 'completed'],
+    acknowledged: ['completed'],
+    completed: [],
+};
 
 export async function GET() {
     const store = getStore();
@@ -14,8 +22,26 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
-    const body = await request.json();
-    const { id, status } = body as { id: string; status: HandoffStatus };
+    const parsed = await parseJsonBody<{
+        id: string;
+        status: HandoffStatus;
+        actor?: string;
+        reason?: string;
+        expectedVersion?: number;
+    }>(request);
+    if ('error' in parsed) return parsed.error;
+    const { id, status, actor, reason, expectedVersion } = parsed.data;
+
+    const actorName = typeof actor === 'string' ? actor.trim() : '';
+    const actionReason = typeof reason === 'string' ? reason.trim() : '';
+
+    if (!actorName) {
+        return NextResponse.json({ error: '請填寫操作人' }, { status: 400 });
+    }
+
+    if (!actionReason) {
+        return NextResponse.json({ error: '請填寫操作原因' }, { status: 400 });
+    }
 
     if (!VALID_HANDOFF_STATUSES.includes(status)) {
         return NextResponse.json({ error: 'Invalid handoff status' }, { status: 400 });
@@ -28,10 +54,41 @@ export async function PUT(request: Request) {
                 throw new Error('Handoff not found');
             }
 
-            store.handoffs[idx].status = status;
-            store.handoffs[idx].acknowledged_at = status === 'acknowledged'
-                ? (store.handoffs[idx].acknowledged_at || new Date().toISOString())
-                : store.handoffs[idx].acknowledged_at;
+            const current = store.handoffs[idx];
+
+            if (expectedVersion !== undefined && expectedVersion !== current.version) {
+                throw new Error('版本衝突：此交接已被其他人修改，請重新載入');
+            }
+
+            const allowedTransitions = HANDOFF_TRANSITIONS[current.status];
+            if (!allowedTransitions.includes(status)) {
+                throw new Error(`交接狀態不能從「${current.status}」轉為「${status}」`);
+            }
+
+            const changes: AuditFieldChange[] = [];
+            const fromStatus = current.status;
+
+            store.handoffs[idx] = {
+                ...current,
+                status,
+                acknowledged_at: status === 'acknowledged'
+                    ? (current.acknowledged_at || new Date().toISOString())
+                    : current.acknowledged_at,
+                version: (current.version || 1) + 1,
+            };
+
+            changes.push({ field: 'status', from: fromStatus, to: status });
+
+            store.audit_logs.push(createAuditLog({
+                entity_type: 'handoff',
+                entity_id: current.id,
+                action: 'status_changed',
+                actor: actorName,
+                reason: actionReason,
+                from_status: fromStatus,
+                to_status: status,
+                changes,
+            }));
 
             return store.handoffs[idx];
         });
@@ -39,6 +96,7 @@ export async function PUT(request: Request) {
         return NextResponse.json(updated);
     } catch (error) {
         const message = error instanceof Error ? error.message : '更新交接失敗';
-        return NextResponse.json({ error: message }, { status: message === 'Handoff not found' ? 404 : 400 });
+        const statusCode = message === 'Handoff not found' ? 404 : message.includes('版本衝突') ? 409 : 400;
+        return NextResponse.json({ error: message }, { status: statusCode });
     }
 }

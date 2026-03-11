@@ -8,8 +8,8 @@ import {
     canCloseFollowup,
     canApproveReview,
     assertPermission,
-    getCurrentUser,
 } from '../src/lib/permissions';
+import { isAuthenticated } from '../src/lib/auth';
 
 function makeUser(role: User['role'], dept: User['dept'] = null): User {
     return {
@@ -142,11 +142,15 @@ describe('Permissions', () => {
         expect(() => assertPermission(allowed)).not.toThrow();
     });
 
-    // ── getCurrentUser ──
+    // ── isAuthenticated (from auth.ts) ──
 
-    it('getCurrentUser returns admin in demo mode', () => {
-        const user = getCurrentUser();
-        expect(user.role).toBe('admin');
-        expect(user.id).toBe('user-admin');
+    it('isAuthenticated returns true for valid cookie value', () => {
+        expect(isAuthenticated('authenticated')).toBe(true);
+    });
+
+    it('isAuthenticated returns false for invalid/missing cookie value', () => {
+        expect(isAuthenticated(undefined)).toBe(false);
+        expect(isAuthenticated(null)).toBe(false);
+        expect(isAuthenticated('wrong')).toBe(false);
     });
 });

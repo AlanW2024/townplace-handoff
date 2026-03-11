@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { FileText, Clock, AlertTriangle, ChevronRight, User, Undo2, History } from 'lucide-react';
-import { AuditLog, AUDIT_ACTION_LABELS, Document, DocStatus, STATUS_LABELS } from '@/lib/types';
+import { FileText, Clock, AlertTriangle, ChevronRight, User, Undo2 } from 'lucide-react';
+import { AuditLog, Document, DocStatus, STATUS_LABELS } from '@/lib/types';
 import { cn, formatDateTime } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
+import AuditTrail from '@/components/AuditTrail';
+import { usePolling } from '@/hooks/usePolling';
 
 type DocumentRecord = Document & {
     audit_logs: AuditLog[];
@@ -51,37 +53,6 @@ function DocStatusPipeline({ currentStatus }: { currentStatus: DocStatus }) {
     );
 }
 
-function AuditTrail({ logs }: { logs: AuditLog[] }) {
-    if (logs.length === 0) {
-        return (
-            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-3">
-                <p className="text-xs text-slate-400">暫時未有操作記錄</p>
-            </div>
-        );
-    }
-
-    return (
-        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-2">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-                <History size={13} />
-                最近操作
-            </div>
-            {logs.slice(0, 3).map(log => (
-                <div key={log.id} className="text-xs text-slate-600 leading-relaxed">
-                    <p className="font-medium text-slate-700">
-                        {AUDIT_ACTION_LABELS[log.action]} · {log.actor}
-                        {log.from_status && log.to_status && log.from_status !== log.to_status && (
-                            <span className="text-slate-400"> · {STATUS_LABELS[log.from_status]} → {STATUS_LABELS[log.to_status]}</span>
-                        )}
-                    </p>
-                    <p className="mt-0.5 text-slate-500">原因：{log.reason}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">{formatDateTime(log.created_at)}</p>
-                </div>
-            ))}
-        </div>
-    );
-}
-
 export default function DocumentsPage() {
     const [documents, setDocuments] = useState<DocumentRecord[]>([]);
     const [loading, setLoading] = useState(true);
@@ -106,8 +77,8 @@ export default function DocumentsPage() {
             const res = await fetch('/api/documents');
             if (!res.ok) throw new Error('載入失敗');
             setDocuments(await res.json());
-        } catch (e: any) {
-            showToast(e.message || '載入文件失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '載入文件失敗', 'error');
         } finally {
             setLoading(false);
         }
@@ -115,10 +86,7 @@ export default function DocumentsPage() {
 
     useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
-    useEffect(() => {
-        const interval = setInterval(fetchDocs, 5000);
-        return () => clearInterval(interval);
-    }, [fetchDocs]);
+    usePolling(fetchDocs, 5000);
 
     const updateDocStatus = async (id: string, newStatus: DocStatus) => {
         const actor = operatorName.trim();
@@ -146,8 +114,8 @@ export default function DocumentsPage() {
             showToast('文件狀態已更新並記錄', 'success');
             setActionReasons(prev => ({ ...prev, [id]: '' }));
             fetchDocs();
-        } catch (e: any) {
-            showToast(e.message || '更新文件失敗', 'error');
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '更新文件失敗', 'error');
         } finally {
             setUpdatingId(null);
         }
@@ -257,7 +225,7 @@ export default function DocumentsPage() {
                     )}
                 </div>
 
-                <AuditTrail logs={doc.audit_logs} />
+                <AuditTrail logs={doc.audit_logs} statusLabelFn={(s) => STATUS_LABELS[s] || s} />
             </div>
         );
     };

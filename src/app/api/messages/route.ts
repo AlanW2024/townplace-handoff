@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getStore } from '@/lib/store';
+import { ChatType, DeptCode } from '@/lib/types';
+import { parseJsonBody } from '@/lib/api-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +13,20 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-    const body = await request.json();
+    const parsed = await parseJsonBody<{
+        raw_text?: string;
+        sender_name?: string;
+        sender_dept?: DeptCode | null;
+        wa_group?: string;
+        chat_name?: string;
+        chat_type?: ChatType;
+    }>(request);
+    if ('error' in parsed) return parsed.error;
+    const body = parsed.data;
+
+    if (typeof body.raw_text !== 'string' || body.raw_text.trim() === '') {
+        return NextResponse.json({ error: 'raw_text 必須是非空字串' }, { status: 400 });
+    }
 
     const { ingestMessage } = await import('@/lib/ingest');
 

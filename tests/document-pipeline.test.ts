@@ -1,24 +1,5 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
-
-const originalCwd = process.cwd();
-
-function jsonRequest(url: string, method: string, body: unknown): Request {
-    return new Request(url, {
-        method,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-}
-
-async function withTempWorkspace(run: () => Promise<void>) {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'townplace-doc-'));
-    process.chdir(tempDir);
-    vi.resetModules();
-    try { await run(); } finally { process.chdir(originalCwd); vi.resetModules(); fs.rmSync(tempDir, { recursive: true, force: true }); }
-}
+import { describe, expect, it } from 'vitest';
+import { withTempWorkspace, jsonRequest } from './helpers';
 
 interface AuditEntry {
     action: string;

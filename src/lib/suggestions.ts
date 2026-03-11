@@ -5,6 +5,7 @@
 import { generateNotifications, NotificationType } from './notifications';
 import { getStore } from './store';
 import { Room, Handoff, Document, Booking, DeptCode, DEPT_INFO } from './types';
+import { NotificationThresholds } from './policy/types';
 
 export type SuggestionPriority = 'urgent' | 'warning' | 'info';
 
@@ -315,10 +316,10 @@ function analyzeDailyPriorities(rooms: Room[], handoffs: Handoff[], documents: D
     }];
 }
 
-export function generateSuggestions(): Suggestion[] {
+export function generateSuggestions(thresholds?: NotificationThresholds): Suggestion[] {
     const store = getStore();
     const { rooms, handoffs, documents, bookings } = store;
-    const activeNotificationTypes = new Set(generateNotifications().map(notification => notification.type));
+    const activeNotificationTypes = new Set(generateNotifications(thresholds).map(notification => notification.type));
 
     const suggestions: Suggestion[] = [
         ...analyzeCleaningBacklog(rooms),

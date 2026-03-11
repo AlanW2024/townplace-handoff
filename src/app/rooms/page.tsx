@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { usePolling } from '@/hooks/usePolling';
 import { AlertTriangle, Wrench, Sparkles, Key, Filter } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -169,8 +170,8 @@ function RoomsPageContent() {
             if (!res.ok) throw new Error('載入失敗');
             setRooms(await res.json());
             setError(null);
-        } catch (e: any) {
-            setError(e.message || '載入失敗');
+        } catch (e: unknown) {
+            setError(e instanceof Error ? e.message : '載入失敗');
         } finally {
             setLoading(false);
         }
@@ -178,10 +179,7 @@ function RoomsPageContent() {
 
     useEffect(() => { fetchRooms(); }, [fetchRooms]);
 
-    useEffect(() => {
-        const interval = setInterval(fetchRooms, 5000);
-        return () => clearInterval(interval);
-    }, [fetchRooms]);
+    usePolling(fetchRooms, 5000);
 
     useEffect(() => {
         if (!highlightedPrimaryRoom) return;
@@ -194,9 +192,9 @@ function RoomsPageContent() {
         autoOpenedHighlightRef.current = highlightedPrimaryRoom;
     }, [highlightedPrimaryRoom, rooms]);
 
-    const roomMap = new Map(rooms.map(r => [r.id, r]));
+    const roomMap = useMemo(() => new Map(rooms.map(r => [r.id, r])), [rooms]);
 
-    const filteredRoomIds = new Set(
+    const filteredRoomIds = useMemo(() => new Set(
         rooms
             .filter(r => {
                 switch (filter) {
@@ -208,7 +206,7 @@ function RoomsPageContent() {
                 }
             })
             .map(r => r.id)
-    );
+    ), [rooms, filter]);
 
     const attentionCount = rooms.filter(r => r.needs_attention).length;
     const vacantCount = rooms.filter(r => r.lease_status === 'vacant' || r.lease_status === 'checkout').length;

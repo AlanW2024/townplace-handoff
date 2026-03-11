@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getStore, withStoreWrite } from '@/lib/store';
 import { createAuditLog, getEntityAuditLogs, getLatestEntityAuditLog } from '@/lib/audit';
 import { AuditFieldChange, DocStatus } from '@/lib/types';
+import { parseJsonBody } from '@/lib/api-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,8 +22,18 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
-    const body = await request.json();
-    const { id, status, actor, reason, current_holder, notes } = body;
+    const parsed = await parseJsonBody<{
+        id: string;
+        status?: string;
+        actor?: string;
+        reason?: string;
+        current_holder?: string;
+        notes?: string;
+        expectedVersion?: number;
+    }>(request);
+    if ('error' in parsed) return parsed.error;
+    const { id, status, actor, reason, current_holder, notes, expectedVersion } = parsed.data;
+
     const actorName = typeof actor === 'string' ? actor.trim() : '';
     const actionReason = typeof reason === 'string' ? reason.trim() : '';
 
@@ -42,6 +53,11 @@ export async function PUT(request: Request) {
             }
 
             const current = store.documents[idx];
+
+            if (expectedVersion !== undefined && expectedVersion !== current.version) {
+                throw new Error('版本衝突：此文件已被其他人修改，請重新載入');
+            }
+
             const nextDocument = { ...current };
             const changes: AuditFieldChange[] = [];
             let auditAction: 'status_advanced' | 'status_reverted' | 'field_updated' | null = null;
@@ -88,6 +104,7 @@ export async function PUT(request: Request) {
             }
 
             nextDocument.updated_at = new Date().toISOString();
+            nextDocument.version = (current.version || 1) + 1;
             store.documents[idx] = nextDocument;
             store.audit_logs.push(createAuditLog({
                 entity_type: 'document',
@@ -110,7 +127,7 @@ export async function PUT(request: Request) {
         return NextResponse.json(updated);
     } catch (error) {
         const message = error instanceof Error ? error.message : '更新失敗';
-        const statusCode = message === 'Document not found' ? 404 : 400;
+        const statusCode = message === 'Document not found' ? 404 : message.includes('版本衝突') ? 409 : 400;
         return NextResponse.json({ error: message }, { status: statusCode });
     }
 }

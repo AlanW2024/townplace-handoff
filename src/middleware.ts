@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { isAuthenticated } from '@/lib/auth';
 
 const PUBLIC_PATHS = ['/login', '/api/auth'];
 
@@ -18,7 +19,7 @@ export function middleware(request: NextRequest) {
 
     // Check auth cookie
     const authCookie = request.cookies.get('tp-auth');
-    if (!authCookie || authCookie.value !== 'authenticated') {
+    if (!isAuthenticated(authCookie?.value)) {
         return NextResponse.redirect(new URL('/login', request.url));
     }
 
