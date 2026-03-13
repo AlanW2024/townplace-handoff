@@ -1,7 +1,7 @@
 import AdmZip from 'adm-zip';
 import { NextResponse } from 'next/server';
 import { ingestMessagesBatch } from '@/lib/ingest';
-import { Message, ChatType, UploadBatch, AiBatchRun } from '@/lib/types';
+import { ChatType, UploadBatch, AiBatchRun } from '@/lib/types';
 import { withStoreWrite } from '@/lib/store';
 import { generateId } from '@/lib/utils';
 import { queueAiBatchAnalysis } from '@/lib/ai/batch-analyze';
@@ -100,6 +100,21 @@ function shouldSkipMessage(sender: string, rawText: string): boolean {
     if (/建立了此群組|新增了你|你現已成為管理員|changed this group's icon|changed the subject|created group|added|left|joined using this group's invite link|security code changed/i.test(text)) return true;
     if (/不明用戶/.test(normalizedSender) && /建立了此群組|加入了|離開了/.test(text)) return true;
 
+    // ── NEW FILTERS ──
+
+    // Deleted messages
+    if (/^(此訊息已被刪除|This message was deleted|You deleted this message)\.?$/i.test(text)) return true;
+
+    // Emoji-only (no letters, digits, or CJK characters)
+    if (!/[a-zA-Z0-9\u4e00-\u9fff\u3400-\u4dbf]/.test(text)) return true;
+
+    // Voice / location / contact / poll placeholders
+    if (/^(語音訊息|voice message|location:|位置：|聯絡人卡片|contact card)/i.test(text)) return true;
+
+    // Pure acknowledgment (exact match, case-insensitive)
+    const ACKNOWLEDGMENT = /^(ok+|okay|o\.?k\.?|noted|roger|copy|收到|好的?|嗯|明白|知道了?|了解|多謝|唔該|thanks?|thank\s*you|thx|tks|got\s*it|will\s*do|sure|yes|no\s*problem|冇問題|盡做|跟|跟住|遵命|好嘅|是的?|係|noted\s*with\s*thanks|received?|ack|okay?👍)$/i;
+    if (ACKNOWLEDGMENT.test(text.trim())) return true;
+
     return false;
 }
 
@@ -194,14 +209,14 @@ export async function POST(request: Request) {
     flushPendingMessage();
 
     // Bulk uploads first preserve every raw message, then kick off full-conversation AI analysis.
-    const results = await ingestMessagesBatch(entriesToIngest, {
+    await ingestMessagesBatch(entriesToIngest, {
         strategy: 'rules_only',
         reviewMode: 'bulk_upload',
         suppressSideEffects: true,
         suppressReviews: true,
         defaultClassification: 'context',
+        includeResults: false,
     });
-    const newMessages: Message[] = results.map(result => result.message);
     const now = new Date().toISOString();
 
     await withStoreWrite(store => {
@@ -213,7 +228,7 @@ export async function POST(request: Request) {
             chat_type: chatType,
             total_lines: lines.length,
             parsed_messages: parsedCount,
-            total_messages: newMessages.length,
+            total_messages: entriesToIngest.length,
             status: 'uploaded',
             ai_batch_run_id: aiBatchRunId,
             summary_digest: null,
@@ -255,6 +270,6 @@ export async function POST(request: Request) {
         handoffs_created: 0,
         chat_name: chatName,
         chat_type: chatType,
-        messages: newMessages,
+        stored_messages: entriesToIngest.length,
     });
 }
