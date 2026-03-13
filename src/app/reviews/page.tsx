@@ -330,6 +330,30 @@ function ReviewsPageContent() {
                         </button>
                     ))}
                 </div>
+
+                {reviews.filter((r: ParseReviewItem) => r.review_status === 'pending').length > 0 && (
+                    <div className="flex gap-2 items-center mt-2">
+                        <button
+                            onClick={() => handleBulkDismiss('low_confidence')}
+                            disabled={bulkDismissing}
+                            className="px-3 py-1.5 text-sm bg-slate-100 hover:bg-slate-200 rounded-md text-slate-700 disabled:opacity-50"
+                        >
+                            略過低信心項 ({reviews.filter((r: ParseReviewItem) => r.review_status === 'pending' && r.confidence < 0.5).length})
+                        </button>
+                        {selectedReviewIds.length > 0 && (
+                            <button
+                                onClick={() => handleBulkDismiss('selected')}
+                                disabled={bulkDismissing}
+                                className="px-3 py-1.5 text-sm bg-amber-100 hover:bg-amber-200 rounded-md text-amber-800 disabled:opacity-50"
+                            >
+                                略過選中 ({selectedReviewIds.length})
+                            </button>
+                        )}
+                        {bulkDismissing && (
+                            <div className="w-4 h-4 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Cards */}
@@ -357,12 +381,14 @@ function ReviewsPageContent() {
                                 : review.suggested_rooms;
 
                             return (
-                                <button
+                                <div
                                     key={review.id}
-                                    type="button"
+                                    role="button"
+                                    tabIndex={0}
                                     onClick={() => selectReview(review)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') selectReview(review); }}
                                     className={cn(
-                                        'scan-tile border-l-4 text-left',
+                                        'scan-tile border-l-4 text-left cursor-pointer',
                                         isPending ? 'border-l-amber-400' : 'border-l-slate-200',
                                         isActive && 'scan-tile-active',
                                         !isPending && 'opacity-60'
@@ -370,9 +396,27 @@ function ReviewsPageContent() {
                                 >
                                     <div className="space-y-3">
                                         <div className="flex items-start justify-between gap-2">
-                                            <span className={cn('scan-chip', statusCfg.bg, statusCfg.color)}>
-                                                {statusCfg.label}
-                                            </span>
+                                            <div className="flex items-center gap-2">
+                                                {isPending && (
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selectedReviewIds.includes(review.id)}
+                                                        onChange={(e) => {
+                                                            e.stopPropagation();
+                                                            if (e.target.checked) {
+                                                                setSelectedReviewIds(prev => [...prev, review.id]);
+                                                            } else {
+                                                                setSelectedReviewIds(prev => prev.filter(id => id !== review.id));
+                                                            }
+                                                        }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        className="mr-1 mt-0.5 cursor-pointer"
+                                                    />
+                                                )}
+                                                <span className={cn('scan-chip', statusCfg.bg, statusCfg.color)}>
+                                                    {statusCfg.label}
+                                                </span>
+                                            </div>
                                             <span className="scan-kicker">覆核</span>
                                         </div>
 
@@ -421,7 +465,7 @@ function ReviewsPageContent() {
                                             </span>
                                         </div>
                                     </div>
-                                </button>
+                                </div>
                             );
                         })}
                     </div>
