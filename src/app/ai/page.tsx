@@ -119,6 +119,13 @@ export default function AIPage() {
     const [creating, setCreating] = useState<string | null>(null);
     const { showToast } = useToast();
 
+    useEffect(() => {
+        const requestedRunId = new URLSearchParams(window.location.search).get('run');
+        if (requestedRunId && requestedRunId !== selectedRunId) {
+            setSelectedRunId(requestedRunId);
+        }
+    }, [selectedRunId]);
+
     const fetchData = useCallback(async () => {
         try {
             const [sugRes, fuRes, batchRes] = await Promise.all([

@@ -1,15 +1,19 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Upload, FileText, CheckCircle, AlertCircle, ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePolling } from '@/hooks/usePolling';
+
+const LAST_UPLOAD_STORAGE_KEY = 'townplace:last-upload-result';
 
 interface UploadResult {
     upload_batch_id: string;
     ai_batch_run_id: string;
     total_lines: number;
     parsed_messages: number;
+    stored_messages: number;
     handoffs_created: number;
     chat_name: string;
     chat_type: 'group' | 'direct';
@@ -33,29 +37,71 @@ interface UploadBatchStatus {
 }
 
 export default function UploadPage() {
+    const router = useRouter();
     const [dragOver, setDragOver] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [result, setResult] = useState<UploadResult | null>(null);
     const [batchStatus, setBatchStatus] = useState<UploadBatchStatus | null>(null);
+    const [restoredStatus, setRestoredStatus] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [chatName, setChatName] = useState('');
     const [chatType, setChatType] = useState<'group' | 'direct'>('group');
     const fileRef = useRef<HTMLInputElement>(null);
 
+    const fetchBatchStatusById = useCallback(async (uploadBatchId: string) => {
+        const res = await fetch(`/api/uploads/${uploadBatchId}`);
+        if (!res.ok) return;
+        const data = await res.json() as UploadBatchStatus;
+        setBatchStatus(data);
+        return data;
+    }, []);
+
     const fetchBatchStatus = useCallback(async () => {
         if (!result?.upload_batch_id) return;
-        const res = await fetch(`/api/uploads/${result.upload_batch_id}`);
-        if (!res.ok) return;
-        setBatchStatus(await res.json());
-    }, [result?.upload_batch_id]);
+        await fetchBatchStatusById(result.upload_batch_id);
+    }, [fetchBatchStatusById, result?.upload_batch_id]);
 
     usePolling(fetchBatchStatus, result?.upload_batch_id ? 3000 : 0);
+
+    useEffect(() => {
+        const savedRaw = window.localStorage.getItem(LAST_UPLOAD_STORAGE_KEY);
+        if (!savedRaw) return;
+
+        try {
+            const saved = JSON.parse(savedRaw) as UploadResult;
+            if (!saved?.upload_batch_id) {
+                window.localStorage.removeItem(LAST_UPLOAD_STORAGE_KEY);
+                return;
+            }
+
+            setResult(saved);
+            setRestoredStatus(true);
+            void fetchBatchStatusById(saved.upload_batch_id).then(status => {
+                if (!status) {
+                    window.localStorage.removeItem(LAST_UPLOAD_STORAGE_KEY);
+                    setResult(null);
+                    setBatchStatus(null);
+                    setRestoredStatus(false);
+                }
+            });
+        } catch {
+            window.localStorage.removeItem(LAST_UPLOAD_STORAGE_KEY);
+        }
+    }, [fetchBatchStatusById]);
+
+    const clearTrackedUpload = useCallback(() => {
+        window.localStorage.removeItem(LAST_UPLOAD_STORAGE_KEY);
+        setResult(null);
+        setBatchStatus(null);
+        setRestoredStatus(false);
+    }, []);
 
     const handleUpload = async (file: File) => {
         setUploading(true);
         setError(null);
         setResult(null);
         setBatchStatus(null);
+        setRestoredStatus(false);
         try {
             const formData = new FormData();
             formData.append('file', file);
@@ -63,12 +109,10 @@ export default function UploadPage() {
             formData.append('chat_type', chatType);
             const res = await fetch('/api/upload', { method: 'POST', body: formData });
             if (!res.ok) throw new Error('上傳失敗');
-            const data = await res.json();
+            const data = await res.json() as UploadResult;
             setResult(data);
-            const batchRes = await fetch(`/api/uploads/${data.upload_batch_id}`);
-            if (batchRes.ok) {
-                setBatchStatus(await batchRes.json());
-            }
+            window.localStorage.setItem(LAST_UPLOAD_STORAGE_KEY, JSON.stringify(data));
+            await fetchBatchStatusById(data.upload_batch_id);
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : '操作失敗');
         } finally {
@@ -171,6 +215,9 @@ export default function UploadPage() {
                     <div className="flex items-center gap-2 mb-4">
                         <CheckCircle size={18} className="text-emerald-500" />
                         <span className="text-sm font-semibold text-emerald-700">上傳成功！</span>
+                        {restoredStatus && (
+                            <span className="status-badge bg-sky-100 text-sky-700">已恢復上次進度</span>
+                        )}
                     </div>
                     <div className="mb-4 flex items-center gap-2 flex-wrap">
                         <span className="status-badge bg-slate-100 text-slate-700">
@@ -188,7 +235,7 @@ export default function UploadPage() {
                             <p className="text-xs text-slate-500 mt-1">已解析訊息</p>
                         </div>
                         <div className="text-center p-3 bg-amber-50 rounded-xl">
-                            <p className="text-2xl font-bold text-amber-700">{batchStatus?.message_count ?? result.parsed_messages}</p>
+                            <p className="text-2xl font-bold text-amber-700">{batchStatus?.message_count ?? result.stored_messages}</p>
                             <p className="text-xs text-slate-500 mt-1">已入庫訊息</p>
                         </div>
                     </div>
@@ -215,11 +262,37 @@ export default function UploadPage() {
                                 </span>
                             )}
                         </div>
-                        {batchStatus && (
+                        {batchStatus?.status === 'completed' && (
+                            <div className="mt-2 p-4 bg-slate-50 rounded-lg">
+                                <h3 className="font-medium mb-2">分類結果</h3>
+                                <div className="grid grid-cols-4 gap-2 text-sm">
+                                    <div className="text-center p-2 bg-emerald-100 rounded">
+                                        <div className="font-bold text-emerald-800">{batchStatus.actionable_count}</div>
+                                        <div className="text-emerald-600">可操作</div>
+                                    </div>
+                                    <div className="text-center p-2 bg-blue-100 rounded">
+                                        <div className="font-bold text-blue-800">{batchStatus.context_count}</div>
+                                        <div className="text-blue-600">背景</div>
+                                    </div>
+                                    <div className="text-center p-2 bg-slate-100 rounded">
+                                        <div className="font-bold text-slate-800">{batchStatus.irrelevant_count}</div>
+                                        <div className="text-slate-600">無關</div>
+                                    </div>
+                                    <div className="text-center p-2 bg-amber-100 rounded">
+                                        <div className="font-bold text-amber-800">{batchStatus.review_count}</div>
+                                        <div className="text-amber-600">待覆核</div>
+                                    </div>
+                                </div>
+                                {batchStatus.summary_digest && (
+                                    <p className="mt-2 text-sm text-slate-600">{batchStatus.summary_digest}</p>
+                                )}
+                            </div>
+                        )}
+                        {batchStatus && batchStatus.status !== 'completed' && (
                             <div className="grid grid-cols-4 gap-2">
                                 <div className="p-2 bg-white rounded-lg text-center">
                                     <p className="text-lg font-bold text-emerald-600">{batchStatus.actionable_count}</p>
-                                    <p className="text-[11px] text-slate-500">有用</p>
+                                    <p className="text-[11px] text-slate-500">可操作</p>
                                 </div>
                                 <div className="p-2 bg-white rounded-lg text-center">
                                     <p className="text-lg font-bold text-sky-600">{batchStatus.context_count}</p>
@@ -231,16 +304,40 @@ export default function UploadPage() {
                                 </div>
                                 <div className="p-2 bg-white rounded-lg text-center">
                                     <p className="text-lg font-bold text-amber-600">{batchStatus.review_count}</p>
-                                    <p className="text-[11px] text-slate-500">覆核</p>
+                                    <p className="text-[11px] text-slate-500">待覆核</p>
                                 </div>
                             </div>
                         )}
-                        {batchStatus?.summary_digest && (
+                        {batchStatus && batchStatus.status !== 'completed' && batchStatus.summary_digest && (
                             <p className="text-xs leading-relaxed text-slate-600 whitespace-pre-wrap">{batchStatus.summary_digest}</p>
                         )}
                     </div>
-                    <p className="text-xs text-slate-500 mt-4 flex items-center gap-1">
-                        <ArrowRight size={12} /> 前往「訊息中心」看原文，前往「AI 管理建議」看批次分析摘要
+                    <div className="mt-4 flex items-center gap-2 flex-wrap">
+                        <button
+                            type="button"
+                            onClick={() => router.push('/')}
+                            className="btn-primary text-sm flex items-center gap-2"
+                        >
+                            <ArrowRight size={14} />
+                            進入訊息中心
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => router.push(`/ai?run=${result.ai_batch_run_id}`)}
+                            className="px-4 py-2 rounded-xl text-sm font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                            查看 AI 分析
+                        </button>
+                        <button
+                            type="button"
+                            onClick={clearTrackedUpload}
+                            className="px-4 py-2 rounded-xl text-sm font-semibold bg-white border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors"
+                        >
+                            清除這次狀態
+                        </button>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-3 flex items-center gap-1">
+                        <ArrowRight size={12} /> 第一個按鈕會帶你去看全部原始訊息，第二個按鈕會直接打開這次 upload 的 AI 批次摘要。
                     </p>
                 </div>
             )}

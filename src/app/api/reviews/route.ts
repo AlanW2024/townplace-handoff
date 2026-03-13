@@ -11,7 +11,7 @@ import {
     getRouteErrorStatus,
     requireAuthenticatedUser,
 } from '@/lib/route-mutations';
-import { ensureRoomCycleForReference } from '@/lib/room-lifecycle';
+import { ensureRoomCycleForReference, resolveRoomDisplayCodes } from '@/lib/room-lifecycle';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,7 +76,11 @@ export async function GET() {
     const sorted = [...store.parse_reviews].sort(
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
-    return NextResponse.json(sorted);
+    return NextResponse.json(sorted.map(review => ({
+        ...review,
+        suggested_room_display_codes: resolveRoomDisplayCodes(store, review.suggested_rooms, review.room_cycle_ids ?? []),
+        reviewed_room_display_codes: resolveRoomDisplayCodes(store, review.reviewed_rooms, review.room_cycle_ids ?? []),
+    })));
 }
 
 export async function POST(request: Request) {
@@ -121,7 +125,11 @@ export async function POST(request: Request) {
         return nextReview;
     });
 
-    return NextResponse.json(review, { status: 201 });
+    return NextResponse.json({
+        ...review,
+        suggested_room_display_codes: resolveRoomDisplayCodes(getStore(), review.suggested_rooms, review.room_cycle_ids ?? []),
+        reviewed_room_display_codes: resolveRoomDisplayCodes(getStore(), review.reviewed_rooms, review.room_cycle_ids ?? []),
+    }, { status: 201 });
 }
 
 export async function PUT(request: Request) {
@@ -276,7 +284,12 @@ export async function PUT(request: Request) {
             return review;
         });
 
-        return NextResponse.json(updatedReview);
+        const store = getStore();
+        return NextResponse.json({
+            ...updatedReview,
+            suggested_room_display_codes: resolveRoomDisplayCodes(store, updatedReview.suggested_rooms, updatedReview.room_cycle_ids ?? []),
+            reviewed_room_display_codes: resolveRoomDisplayCodes(store, updatedReview.reviewed_rooms, updatedReview.room_cycle_ids ?? []),
+        });
     } catch (error) {
         const message = error instanceof Error ? error.message : '更新覆核失敗';
         const status = error instanceof Error && (error.message.includes('已處理') || error.message.includes('衝突'))

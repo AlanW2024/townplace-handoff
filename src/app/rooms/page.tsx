@@ -184,6 +184,13 @@ function RoomsPageContent() {
     const highlightSet = useMemo(() => new Set(highlightedRooms), [highlightedRooms]);
     const highlightedPrimaryRoom = searchParams.get('highlight') || highlightedRooms[0] || null;
 
+    useEffect(() => {
+        const nextScope = searchParams.get('scope');
+        if (nextScope === 'active' || nextScope === 'archived') {
+            setScope(nextScope);
+        }
+    }, [searchParams]);
+
     const fetchRooms = useCallback(async () => {
         try {
             const res = await fetch(`/api/rooms?scope=${scope}`);

@@ -18,8 +18,9 @@ export async function GET(
         ? store.ai_batch_runs.find(item => item.id === batch.ai_batch_run_id) ?? null
         : null;
     const messages = store.messages.filter(message => message.upload_batch_id === batch.id);
+    const messageIds = new Set(messages.map(message => message.id));
     const reviewCount = store.parse_reviews.filter(review =>
-        messages.some(message => message.id === review.message_id && review.review_status === 'pending')
+        review.review_status === 'pending' && messageIds.has(review.message_id)
     ).length;
 
     return NextResponse.json({

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { memo, useState, useEffect, useCallback, useMemo, useDeferredValue, useRef } from 'react';
 import { usePolling } from '@/hooks/usePolling';
 import {
     MessageSquare, ArrowRightLeft, Send, AlertTriangle, Brain, MessagesSquare, Phone, ShieldCheck
@@ -8,6 +8,35 @@ import {
 import { Message, Handoff, DEPT_INFO, DeptCode, ChatType, AiMessageClassification } from '@/lib/types';
 import { cn, formatTime, timeAgo } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
+
+type HandoffRecord = Handoff & {
+    room_display_code?: string;
+};
+
+type DashboardMessage = Message & {
+    needs_review?: boolean;
+};
+
+type MessageCounts = {
+    all: number;
+    parsed: number;
+    review: number;
+    relevant: number;
+    irrelevant: number;
+    group: number;
+    direct: number;
+};
+
+const MESSAGE_PAGE_SIZE = 120;
+const EMPTY_COUNTS: MessageCounts = {
+    all: 0,
+    parsed: 0,
+    review: 0,
+    relevant: 0,
+    irrelevant: 0,
+    group: 0,
+    direct: 0,
+};
 
 function DeptBadge({ dept }: { dept: DeptCode }) {
     const info = DEPT_INFO[dept];
@@ -35,7 +64,7 @@ function SourceBadge({ type, name }: { type: ChatType; name: string }) {
     );
 }
 
-function ParseCard({ message, needsReview }: { message: Message; needsReview: boolean }) {
+const ParseCard = memo(function ParseCard({ message, needsReview }: { message: DashboardMessage; needsReview: boolean }) {
     const deptInfo = DEPT_INFO[message.sender_dept] || DEPT_INFO.conc;
     const parserLabel = message.parsed_by === 'anthropic'
         ? 'Claude AI'
@@ -195,9 +224,9 @@ function ParseCard({ message, needsReview }: { message: Message; needsReview: bo
             </div>
         </div>
     );
-}
+});
 
-function HandoffCard({
+const HandoffCard = memo(function HandoffCard({
     handoff,
     operatorName,
     reason,
@@ -205,7 +234,7 @@ function HandoffCard({
     onReasonChange,
     onAcknowledge,
 }: {
-    handoff: Handoff;
+    handoff: HandoffRecord;
     operatorName: string;
     reason: string;
     submitting: boolean;
@@ -225,7 +254,7 @@ function HandoffCard({
             <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                        <span className="px-2 py-0.5 bg-slate-100 rounded-md text-sm font-bold text-slate-800">{handoff.room_id}</span>
+                        <span className="px-2 py-0.5 bg-slate-100 rounded-md text-sm font-bold text-slate-800">{handoff.room_display_code || handoff.room_id}</span>
                         <span className={cn(
                             'status-badge text-[10px]',
                             handoff.status === 'pending' ? 'bg-amber-100 text-amber-700' :
@@ -268,16 +297,19 @@ function HandoffCard({
             </div>
         </div>
     );
-}
+});
 
 type CenterFilter = 'all' | 'parsed' | 'review' | 'group' | 'direct' | 'relevant' | 'irrelevant';
 const OPERATOR_STORAGE_KEY = 'tpsoho-operator-name';
 
 export default function DashboardPage() {
-    const [messages, setMessages] = useState<Message[]>([]);
-    const [handoffs, setHandoffs] = useState<Handoff[]>([]);
-    const [pendingReviewMessageIds, setPendingReviewMessageIds] = useState<string[]>([]);
+    const [messages, setMessages] = useState<DashboardMessage[]>([]);
+    const [handoffs, setHandoffs] = useState<HandoffRecord[]>([]);
+    const [messageCounts, setMessageCounts] = useState<MessageCounts>(EMPTY_COUNTS);
+    const [filteredMessageTotal, setFilteredMessageTotal] = useState(0);
+    const [hasMoreMessages, setHasMoreMessages] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
     const [newMessage, setNewMessage] = useState('');
     const [senderName, setSenderName] = useState('');
     const [chatName, setChatName] = useState('SOHO 前線🏡🧹🦫🐿️');
@@ -288,6 +320,11 @@ export default function DashboardPage() {
     const [handoffReasons, setHandoffReasons] = useState<Record<string, string>>({});
     const [updatingHandoffId, setUpdatingHandoffId] = useState<string | null>(null);
     const { showToast } = useToast();
+    const loadedMessageCountRef = useRef(0);
+
+    useEffect(() => {
+        loadedMessageCountRef.current = messages.length;
+    }, [messages.length]);
 
     useEffect(() => {
         const saved = window.localStorage.getItem(OPERATOR_STORAGE_KEY);
@@ -300,55 +337,74 @@ export default function DashboardPage() {
         }
     }, [operatorName]);
 
-    const fetchData = useCallback(async () => {
+    const fetchMessages = useCallback(async (options?: { append?: boolean; keepLoadedCount?: boolean }) => {
+        const append = options?.append ?? false;
+        const loadedCount = loadedMessageCountRef.current;
+        const offset = append ? loadedCount : 0;
+        const limit = options?.keepLoadedCount ? Math.max(loadedCount, MESSAGE_PAGE_SIZE) : MESSAGE_PAGE_SIZE;
+        const params = new URLSearchParams({
+            filter: centerFilter,
+            offset: String(offset),
+            limit: String(limit),
+        });
+        const res = await fetch(`/api/messages?${params.toString()}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '載入訊息失敗');
+
+        setMessageCounts(data.counts ?? EMPTY_COUNTS);
+        setHasMoreMessages(Boolean(data.pagination?.has_more));
+        setFilteredMessageTotal(data.pagination?.total_filtered ?? 0);
+        setMessages((previous) => append ? [...previous, ...(data.messages ?? [])] : (data.messages ?? []));
+    }, [centerFilter]);
+
+    const fetchData = useCallback(async (options?: { messagesOnly?: boolean; appendMessages?: boolean; keepLoadedCount?: boolean }) => {
         try {
-            const [msgRes, hoRes, reviewRes] = await Promise.all([
-                fetch('/api/messages'),
+            if (options?.messagesOnly) {
+                await fetchMessages({
+                    append: options.appendMessages,
+                    keepLoadedCount: options.keepLoadedCount,
+                });
+                return;
+            }
+
+            const [messagesRes, handoffsRes] = await Promise.all([
+                fetch(`/api/messages?filter=${centerFilter}&offset=0&limit=${options?.keepLoadedCount ? Math.max(loadedMessageCountRef.current, MESSAGE_PAGE_SIZE) : MESSAGE_PAGE_SIZE}`),
                 fetch('/api/handoffs'),
-                fetch('/api/reviews'),
             ]);
-            if (!msgRes.ok || !hoRes.ok || !reviewRes.ok) throw new Error('載入失敗');
-            const [msgs, hos, reviews] = await Promise.all([msgRes.json(), hoRes.json(), reviewRes.json()]);
-            setMessages(msgs);
-            setHandoffs(hos);
-            setPendingReviewMessageIds(
-                Array.from(new Set(
-                    reviews
-                        .filter((review: { review_status: string; message_id: string }) => review.review_status === 'pending')
-                        .map((review: { message_id: string }) => review.message_id)
-                ))
-            );
+            const [messagesData, handoffsData] = await Promise.all([messagesRes.json(), handoffsRes.json()]);
+            if (!messagesRes.ok || !handoffsRes.ok) throw new Error(messagesData.error || handoffsData.error || '載入失敗');
+            setMessages(messagesData.messages ?? []);
+            setMessageCounts(messagesData.counts ?? EMPTY_COUNTS);
+            setHasMoreMessages(Boolean(messagesData.pagination?.has_more));
+            setFilteredMessageTotal(messagesData.pagination?.total_filtered ?? 0);
+            setHandoffs(handoffsData);
         } catch (e: unknown) {
             showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         } finally {
             setLoading(false);
+            setLoadingMoreMessages(false);
         }
-    }, [showToast]);
+    }, [centerFilter, fetchMessages, showToast]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        setLoading(true);
+        fetchData();
+    }, [centerFilter, fetchData]);
 
-    usePolling(fetchData, 5000);
+    usePolling(() => {
+        fetchData({ keepLoadedCount: true });
+    }, 15000);
+    const deferredMessages = useDeferredValue(messages);
 
-    const pendingReviewIdSet = useMemo(() => new Set(pendingReviewMessageIds), [pendingReviewMessageIds]);
-
-    const filteredMessages = useMemo(() => {
-        switch (centerFilter) {
-            case 'parsed':
-                return messages.filter(message => Boolean(message.parsed_action));
-            case 'review':
-                return messages.filter(message => pendingReviewIdSet.has(message.id));
-            case 'relevant':
-                return messages.filter(message => message.ai_classification && message.ai_classification !== 'irrelevant');
-            case 'irrelevant':
-                return messages.filter(message => message.ai_classification === 'irrelevant');
-            case 'group':
-                return messages.filter(message => message.chat_type === 'group');
-            case 'direct':
-                return messages.filter(message => message.chat_type === 'direct');
-            default:
-                return messages;
-        }
-    }, [centerFilter, messages, pendingReviewIdSet]);
+    const stats = useMemo(() => {
+        return {
+            parsedCount: messageCounts.parsed,
+            relevantCount: messageCounts.relevant,
+            irrelevantCount: messageCounts.irrelevant,
+            groupCount: messageCounts.group,
+            directCount: messageCounts.direct,
+        };
+    }, [messageCounts]);
 
     const handleSendMessage = async () => {
         if (!newMessage.trim() || sendingMessage) return;
@@ -376,7 +432,7 @@ export default function DashboardPage() {
         }
     };
 
-    const handleAcknowledge = async (handoff: Handoff, reason: string) => {
+    const handleAcknowledge = async (handoff: HandoffRecord, reason: string) => {
         const actor = operatorName.trim();
         const actionReason = reason.trim();
 
@@ -415,14 +471,9 @@ export default function DashboardPage() {
         }
     };
 
-    const pendingHandoffs = handoffs.filter(h => h.status === 'pending');
-    const otherHandoffs = handoffs.filter(h => h.status !== 'pending');
-    const reviewCount = pendingReviewMessageIds.length;
-    const parsedCount = messages.filter(message => Boolean(message.parsed_action)).length;
-    const relevantCount = messages.filter(message => message.ai_classification && message.ai_classification !== 'irrelevant').length;
-    const irrelevantCount = messages.filter(message => message.ai_classification === 'irrelevant').length;
-    const groupCount = messages.filter(message => message.chat_type === 'group').length;
-    const directCount = messages.filter(message => message.chat_type === 'direct').length;
+    const pendingHandoffs = useMemo(() => handoffs.filter(h => h.status === 'pending'), [handoffs]);
+    const otherHandoffs = useMemo(() => handoffs.filter(h => h.status !== 'pending'), [handoffs]);
+    const reviewCount = messageCounts.review;
 
     if (loading) {
         return (
@@ -458,10 +509,10 @@ export default function DashboardPage() {
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 {[
-                    { label: '已解析訊息', value: parsedCount, icon: Brain, bg: 'bg-violet-50', color: 'text-violet-700' },
+                    { label: '已解析訊息', value: stats.parsedCount, icon: Brain, bg: 'bg-violet-50', color: 'text-violet-700' },
                     { label: '待覆核訊息', value: reviewCount, icon: AlertTriangle, bg: 'bg-amber-50', color: 'text-amber-700' },
-                    { label: '群組來源', value: groupCount, icon: MessagesSquare, bg: 'bg-blue-50', color: 'text-blue-700' },
-                    { label: '直聊來源', value: directCount, icon: Phone, bg: 'bg-emerald-50', color: 'text-emerald-700' },
+                    { label: '群組來源', value: stats.groupCount, icon: MessagesSquare, bg: 'bg-blue-50', color: 'text-blue-700' },
+                    { label: '直聊來源', value: stats.directCount, icon: Phone, bg: 'bg-emerald-50', color: 'text-emerald-700' },
                 ].map(stat => (
                     <div key={stat.label} className={cn('glass-card p-4', stat.bg)}>
                         <div className="flex items-center gap-1.5 mb-1">
@@ -531,13 +582,13 @@ export default function DashboardPage() {
                         </div>
                         <div className="flex gap-2 flex-wrap">
                                 {([
-                                    { key: 'all' as CenterFilter, label: `全部 (${messages.length})` },
-                                    { key: 'relevant' as CenterFilter, label: `有用/背景 (${relevantCount})` },
-                                    { key: 'irrelevant' as CenterFilter, label: `無關 (${irrelevantCount})` },
-                                    { key: 'parsed' as CenterFilter, label: `已解析 (${parsedCount})` },
+                                    { key: 'all' as CenterFilter, label: `全部 (${messageCounts.all})` },
+                                    { key: 'relevant' as CenterFilter, label: `有用/背景 (${stats.relevantCount})` },
+                                    { key: 'irrelevant' as CenterFilter, label: `無關 (${stats.irrelevantCount})` },
+                                    { key: 'parsed' as CenterFilter, label: `已解析 (${stats.parsedCount})` },
                                     { key: 'review' as CenterFilter, label: `待覆核 (${reviewCount})` },
-                                    { key: 'group' as CenterFilter, label: `群組 (${groupCount})` },
-                                { key: 'direct' as CenterFilter, label: `直聊 (${directCount})` },
+                                    { key: 'group' as CenterFilter, label: `群組 (${stats.groupCount})` },
+                                { key: 'direct' as CenterFilter, label: `直聊 (${stats.directCount})` },
                             ]).map(filter => (
                                 <button
                                     key={filter.key}
@@ -555,16 +606,37 @@ export default function DashboardPage() {
                         </div>
                     </div>
 
+                    <div className="glass-card p-3 flex items-center justify-between gap-3 flex-wrap">
+                        <p className="text-xs text-slate-500">
+                            為了順暢瀏覽，現時載入 <span className="font-semibold text-slate-700">{deferredMessages.length}</span> / <span className="font-semibold text-slate-700">{filteredMessageTotal}</span> 則訊息。
+                        </p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            {hasMoreMessages && (
+                                <button
+                                    onClick={() => {
+                                        if (loadingMoreMessages) return;
+                                        setLoadingMoreMessages(true);
+                                        fetchData({ messagesOnly: true, appendMessages: true });
+                                    }}
+                                    disabled={loadingMoreMessages}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white text-slate-600 hover:bg-slate-50 border border-slate-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                    {loadingMoreMessages ? '載入中...' : `載入更多 ${MESSAGE_PAGE_SIZE} 則`}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
                     <div className="space-y-3">
-                        {filteredMessages.map(message => (
+                        {deferredMessages.map(message => (
                             <ParseCard
                                 key={message.id}
                                 message={message}
-                                needsReview={pendingReviewIdSet.has(message.id)}
+                                needsReview={Boolean(message.needs_review)}
                             />
                         ))}
 
-                        {filteredMessages.length === 0 && (
+                        {deferredMessages.length === 0 && (
                             <div className="glass-card p-8 text-center">
                                 <MessageSquare size={32} className="text-slate-300 mx-auto mb-3" />
                                 <p className="text-sm text-slate-500">目前沒有符合條件的訊息</p>

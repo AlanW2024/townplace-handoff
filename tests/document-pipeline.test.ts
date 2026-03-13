@@ -9,6 +9,51 @@ interface AuditEntry {
 }
 
 describe.sequential('Document Pipeline', () => {
+    it('GET returns archived room display code when document is attached to archived cycle', async () => {
+        await withTempWorkspace(async () => {
+            const storeMod = await import('../src/lib/store');
+            const { GET } = await import('../src/app/api/documents/route');
+
+            await storeMod.withStoreWrite((store: any) => {
+                store.documents.push({
+                    id: 'doc-ex-2a',
+                    property_id: 'tp-soho',
+                    room_id: '2A',
+                    room_cycle_id: 'cycle-ex-2a',
+                    doc_type: 'TA',
+                    status: 'preparing',
+                    current_holder: 'Leasing',
+                    notes: '歷史週期文件',
+                    days_outstanding: 1,
+                    updated_at: new Date().toISOString(),
+                    version: 1,
+                });
+                store.room_cycles.push({
+                    id: 'cycle-ex-2a',
+                    property_id: 'tp-soho',
+                    room_id: '2A',
+                    display_code: 'EX 2A',
+                    scope: 'archived',
+                    lifecycle_status: 'archived',
+                    tenant_name: 'Former Tenant',
+                    check_in_at: null,
+                    check_out_at: new Date().toISOString(),
+                    archived_from_code: '2A',
+                    migrated: true,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                });
+            });
+
+            const response = await GET();
+            expect(response.status).toBe(200);
+
+            const data = await response.json() as Array<{ id: string; room_display_code?: string }>;
+            const record = data.find(item => item.id === 'doc-ex-2a');
+            expect(record?.room_display_code).toBe('EX 2A');
+        });
+    });
+
     // ── Valid transitions: forward 5 ──
 
     it('1. not_started → preparing (doc-004): status=200, audit action=status_advanced', async () => {

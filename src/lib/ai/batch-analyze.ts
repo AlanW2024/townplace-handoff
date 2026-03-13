@@ -1,7 +1,7 @@
 import { getStore, withStoreWrite } from '../store';
-import { analyzeHandoffSignal, enforceHandoffSafety } from '../message-parsing';
+import { classifyMessageForOperationalQueue } from '../review-queue';
 import { ensureRoomCycleForReference } from '../room-lifecycle';
-import { AiBatchRun, AiExtractedEvent, AiMessageClassification, Message, ParseReview, RoomReference } from '../types';
+import { AiBatchRun, AiExtractedEvent, Message, ParseReview, RoomReference } from '../types';
 import { generateId } from '../utils';
 import { callStructuredJsonModel, getProviderConfig } from './parse-message';
 import { BatchChunkAnalysis, BatchEventCandidate, BatchMessageClassification, BatchMessageView } from './batch-types';
@@ -9,6 +9,8 @@ import { chunkMessages } from './chunk-messages';
 import { mergeChunkAnalyses } from './merge-events';
 
 const runningRuns = new Set<string>();
+const queuedRuns: string[] = [];
+let drainingQueue = false;
 
 function toBatchMessageView(message: Message): BatchMessageView {
     return {
@@ -44,54 +46,19 @@ function summarizeClassifications(classifications: BatchMessageClassification[])
 }
 
 function classificationForMessage(message: BatchMessageView): BatchMessageClassification {
-    const handoffSignal = analyzeHandoffSignal(message.raw_text);
-    const safeParsed = enforceHandoffSafety(message.raw_text, {
-        rooms: message.parsed_room_refs.map(ref => ref.physical_room_id),
-        room_refs: message.parsed_room_refs,
-        action: message.parsed_action,
-        type: (message.parsed_type as any) ?? null,
-        from_dept: null,
-        to_dept: null,
+    const decision = classifyMessageForOperationalQueue({
+        raw_text: message.raw_text,
+        parsed_room_refs: message.parsed_room_refs,
+        parsed_action: message.parsed_action,
+        parsed_type: message.parsed_type,
         confidence: message.confidence,
-        explanation: null,
+        sender_dept: message.sender_dept,
     });
-
-    if (safeParsed.action && safeParsed.rooms.length > 0 && handoffSignal.allowsImmediateHandoff) {
-        return {
-            message_id: message.id,
-            classification: 'actionable',
-            reason: '訊息明確指向房間，且 handoff 語句屬即時正向，可作可操作事件。',
-        };
-    }
-
-    if (safeParsed.rooms.length > 0 && (!safeParsed.action || safeParsed.confidence < 0.72)) {
-        return {
-            message_id: message.id,
-            classification: 'review',
-            reason: '訊息提到房間，但動作或語意仍不夠穩定，交由覆核層處理。',
-        };
-    }
-
-    if (safeParsed.action && safeParsed.rooms.length > 0) {
-        return {
-            message_id: message.id,
-            classification: 'actionable',
-            reason: '訊息具房間和可理解動作，可歸入營運事件。',
-        };
-    }
-
-    if (safeParsed.action || /(check[\s-]?out|check[\s-]?in|退房|入住|文件|inventory|surrender|TA|newlet|viewing|clean|清潔|工程|維修)/i.test(message.raw_text)) {
-        return {
-            message_id: message.id,
-            classification: 'context',
-            reason: '訊息與營運流程有關，但不足以直接形成事件或交接。',
-        };
-    }
 
     return {
         message_id: message.id,
-        classification: 'irrelevant',
-        reason: '訊息未指向可操作房間或營運動作，保留作原始對話記錄。',
+        classification: decision.classification,
+        reason: decision.reason,
     };
 }
 
@@ -158,6 +125,18 @@ function buildChunkPrompt(messages: BatchMessageView[]): string {
         '5. 所有事件必須附 evidence_message_ids。',
         '6. 請輸出 JSON，不要輸出 Markdown。',
         '',
+        '⚠️ 分類指引（嚴格遵守）：',
+        '- irrelevant：確認回覆（ok、收到、noted、好的、👍）、寒暄（早晨、食咗飯未）、',
+        '  純感謝（多謝、thx）、表情符號、無上下文短語（跟、盡做）、已刪除訊息。',
+        '  即使提及房號，若核心內容只是確認/感謝，仍標記為 irrelevant。',
+        '  例：「10F ok」→ irrelevant，「收到，23D」→ irrelevant，「23D 多謝師傅」→ irrelevant。',
+        '- context：有營運背景但不需要立即行動的訊息（問題、安排、FYI、進度報告）。',
+        '  例：「10F 幾時搞好？」→ context，「吉房清潔安排，FYI」→ context。',
+        '- review：有房號 + 模糊的完成/狀態語句，無法確定應否建立 handoff。',
+        '  例：「19C 完成」→ review（因為無「可清」，不確定是否可清潔）。',
+        '- actionable：有明確房號 + 明確動作 + 高信心度。',
+        '  例：「10F 已完成，可清潔」→ actionable。',
+        '',
         'JSON schema：',
         JSON.stringify({
             message_classifications: [
@@ -213,8 +192,9 @@ function normalizeRoomRefs(rawRoomRefs: unknown): RoomReference[] {
 function normalizeChunkAnalysis(raw: any, messages: BatchMessageView[], provider: ReturnType<typeof getProviderConfig>): BatchChunkAnalysis {
     const validIds = new Set(messages.map(message => message.id));
     const fallback = buildFallbackChunkAnalysis(messages);
+    const fallbackMap = new Map(fallback.message_classifications.map(item => [item.message_id, item]));
 
-    const message_classifications: BatchMessageClassification[] = Array.isArray(raw?.message_classifications)
+    const aiMessageClassifications: BatchMessageClassification[] = Array.isArray(raw?.message_classifications)
         ? raw.message_classifications
             .filter((item: any) => validIds.has(item?.message_id))
             .map((item: any) => ({
@@ -225,6 +205,31 @@ function normalizeChunkAnalysis(raw: any, messages: BatchMessageView[], provider
                 reason: typeof item?.reason === 'string' && item.reason.trim() ? item.reason.trim() : 'AI 未提供額外原因。',
             }))
         : fallback.message_classifications;
+
+    const aiClassificationMap = new Map(aiMessageClassifications.map(item => [item.message_id, item]));
+    const message_classifications: BatchMessageClassification[] = messages.map(message => {
+        const guarded = fallbackMap.get(message.id) ?? classificationForMessage(message);
+        const suggested = aiClassificationMap.get(message.id);
+        if (!suggested) return guarded;
+
+        if (suggested.classification === 'review' && guarded.classification !== 'review') {
+            return {
+                message_id: message.id,
+                classification: guarded.classification,
+                reason: guarded.reason,
+            };
+        }
+
+        if (guarded.classification === 'review' && suggested.classification !== 'review') {
+            return {
+                message_id: message.id,
+                classification: 'review',
+                reason: guarded.reason,
+            };
+        }
+
+        return suggested;
+    });
 
     const normalizeEventList = (rawEvents: unknown, event_type: BatchEventCandidate['event_type']): BatchEventCandidate[] => {
         if (!Array.isArray(rawEvents)) return [];
@@ -355,7 +360,7 @@ export async function runAiBatchAnalysis(runId: string): Promise<void> {
     try {
         const initialStore = getStore();
         const run = initialStore.ai_batch_runs.find(item => item.id === runId);
-        if (!run) return;
+        if (!run || run.status === 'completed' || run.status === 'failed') return;
 
         const batchMessages = initialStore.messages
             .filter(message => message.upload_batch_id === run.upload_batch_id)
@@ -451,11 +456,36 @@ export async function runAiBatchAnalysis(runId: string): Promise<void> {
         });
     } finally {
         runningRuns.delete(runId);
+        void drainQueuedAnalyses();
+    }
+}
+
+async function drainQueuedAnalyses(): Promise<void> {
+    if (drainingQueue || runningRuns.size > 0) return;
+    drainingQueue = true;
+
+    try {
+        while (queuedRuns.length > 0) {
+            if (runningRuns.size > 0) return;
+
+            const nextRunId = queuedRuns.shift();
+            if (!nextRunId) continue;
+            await runAiBatchAnalysis(nextRunId);
+        }
+    } finally {
+        drainingQueue = false;
+        if (queuedRuns.length > 0 && runningRuns.size === 0) {
+            setTimeout(() => {
+                void drainQueuedAnalyses();
+            }, 10);
+        }
     }
 }
 
 export function queueAiBatchAnalysis(runId: string): void {
+    if (runningRuns.has(runId) || queuedRuns.includes(runId)) return;
+    queuedRuns.push(runId);
     setTimeout(() => {
-        void runAiBatchAnalysis(runId);
+        void drainQueuedAnalyses();
     }, 10);
 }

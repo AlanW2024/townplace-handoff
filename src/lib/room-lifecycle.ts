@@ -130,3 +130,19 @@ export function resolveRoomCycleDisplayCode(
     }
     return roomId;
 }
+
+export function resolveRoomDisplayCodes(
+    store: { room_cycles: RoomCycle[] },
+    roomIds: string[] = [],
+    roomCycleIds: string[] = []
+): string[] {
+    if (roomCycleIds.length > 0) {
+        return Array.from(new Set(
+            roomCycleIds
+                .map(roomCycleId => store.room_cycles.find(cycle => cycle.id === roomCycleId)?.display_code)
+                .filter((displayCode): displayCode is string => Boolean(displayCode))
+        ));
+    }
+
+    return Array.from(new Set(roomIds));
+}

@@ -23,6 +23,7 @@ import {
 import { createAuditLog } from './audit';
 import { parseWhatsAppMessage } from './parser';
 import { emitEvent } from './observability';
+import { classifyMessageForOperationalQueue } from './review-queue';
 import { createActiveCycleFromRoom, getActiveRoomCycle, normalizeRoomCycles } from './room-lifecycle';
 
 export const DEFAULT_PROPERTY_ID = 'tp-soho';
@@ -50,6 +51,7 @@ const LOCK_PATH = `${STORE_PATH}.lock`;
 const STORE_LOCK_STALE_MS = 30_000;
 const STORE_LOCK_TIMEOUT_MS = 5_000;
 const STORE_LOCK_POLL_MS = 25;
+const AI_BATCH_STALE_MS = 60_000;
 let writeQueue: Promise<void> = Promise.resolve();
 let seedStoreCache: StoreData | null = null;
 
@@ -167,6 +169,14 @@ function normalizeMessageRoomRefs(message: Message): RoomReference[] {
     }
 
     return (message.parsed_room ?? []).map(buildActiveRoomRef);
+}
+
+function isBareRoomPing(text: string): boolean {
+    return text
+        .trim()
+        .replace(/[\s,，、/]+/g, '')
+        .replace(/^EX/ig, '')
+        .match(/^\d{1,2}[A-M]$/i) !== null;
 }
 
 function inferSeedChatMetadata(senderName: string, rawText: string): { chat_name: string; chat_type: ChatType } {
@@ -497,33 +507,109 @@ function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
         version: (room as Room).version ?? 1,
     } as Room));
     const normalizedRoomCycles = normalizeRoomCycles(normalizedRooms, store.room_cycles ?? seedStore.room_cycles);
+    const normalizedMessages = (store.messages ?? seedStore.messages).map(message => {
+        const chatMeta = inferSeedChatMetadata(message.sender_name, message.raw_text);
+        const normalizedMessage: Message = {
+            ...message,
+            property_id: (message as Message).property_id ?? DEFAULT_PROPERTY_ID,
+            wa_group: message.wa_group ?? chatMeta.chat_name,
+            chat_name: message.chat_name ?? message.wa_group ?? chatMeta.chat_name,
+            chat_type: message.chat_type ?? chatMeta.chat_type,
+            parsed_explanation: message.parsed_explanation ?? (
+                message.parsed_action
+                    ? '由規則引擎根據房號、關鍵字與發送者部門推斷。'
+                    : '規則引擎未能穩定判斷，需人工覆核。'
+            ),
+            parsed_by: (message.parsed_by ?? 'rules') as ParseEngine,
+            parsed_model: message.parsed_model ?? (message.parsed_by === 'review' ? 'human-review' : 'rule-engine'),
+            parsed_room_refs: normalizeMessageRoomRefs(message as Message),
+            upload_batch_id: message.upload_batch_id ?? null,
+            ai_classification: message.ai_classification ?? null,
+            ai_classification_reason: message.ai_classification_reason ?? null,
+        };
+
+        if (!normalizedMessage.ai_classification || !normalizedMessage.ai_classification_reason) {
+            const decision = classifyMessageForOperationalQueue({
+                raw_text: normalizedMessage.raw_text,
+                parsed_room_refs: normalizedMessage.parsed_room_refs,
+                parsed_action: normalizedMessage.parsed_action,
+                parsed_type: normalizedMessage.parsed_type,
+                confidence: normalizedMessage.confidence,
+                sender_dept: normalizedMessage.sender_dept,
+            });
+            normalizedMessage.ai_classification = decision.classification;
+            normalizedMessage.ai_classification_reason = decision.reason;
+        }
+
+        return normalizedMessage;
+    });
+    const messageMap = new Map(normalizedMessages.map(message => [message.id, message]));
+    const normalizedReviews = (store.parse_reviews ?? seedStore.parse_reviews)
+        .map(review => ({
+            ...review,
+            room_cycle_ids: review.room_cycle_ids ?? review.reviewed_rooms.map(roomId =>
+                resolveActiveRoomCycleId(normalizedRoomCycles, roomId, review.property_id)
+            ),
+            version: review.version ?? 1,
+        }))
+        .filter(review => {
+            if (review.review_status !== 'pending') return true;
+
+            const message = messageMap.get(review.message_id);
+            if (!message) return true;
+
+            const decision = classifyMessageForOperationalQueue({
+                raw_text: message.raw_text,
+                parsed_room_refs: message.parsed_room_refs,
+                parsed_action: message.parsed_action,
+                parsed_type: message.parsed_type,
+                confidence: message.confidence,
+                sender_dept: message.sender_dept,
+            });
+
+            message.ai_classification = decision.classification;
+            message.ai_classification_reason = decision.reason;
+
+            const isUntouchedAutoReview = !review.reviewed_by && !review.reviewed_at && message.parsed_by !== 'review';
+            const isLegacyUploadReview = review.message_id.startsWith('msg-upload-') && !message.upload_batch_id;
+            const isStaleRoomPing = isBareRoomPing(message.raw_text) && !message.parsed_action;
+            if (isUntouchedAutoReview && decision.classification !== 'review' && (isLegacyUploadReview || isStaleRoomPing)) {
+                return false;
+            }
+
+            return true;
+        });
+
+    const normalizedAiBatchRuns = (store.ai_batch_runs ?? seedStore.ai_batch_runs).map(run => {
+        const normalizedRun: AiBatchRun = {
+            ...run,
+            provider: run.provider ?? 'fallback',
+            model: run.model ?? null,
+            summary_digest: run.summary_digest ?? null,
+            error: run.error ?? null,
+            started_at: run.started_at ?? null,
+            completed_at: run.completed_at ?? null,
+            updated_at: run.updated_at ?? run.created_at,
+        };
+
+        const lastTouchedAt = new Date(normalizedRun.updated_at).getTime();
+        const isStaleRunningRun = normalizedRun.status === 'running' && Date.now() - lastTouchedAt > AI_BATCH_STALE_MS;
+        if (isStaleRunningRun) {
+            normalizedRun.status = 'failed';
+            normalizedRun.error = normalizedRun.error ?? '背景分析在 server 重啟或中斷後未能完成，請重新上傳或重跑分析。';
+            normalizedRun.completed_at = normalizedRun.completed_at ?? normalizedRun.updated_at;
+        }
+
+        return normalizedRun;
+    });
+    const aiBatchRunMap = new Map(normalizedAiBatchRuns.map(run => [run.id, run]));
 
     return {
         properties: store.properties ?? seedStore.properties,
         users: store.users ?? seedStore.users,
         rooms: normalizedRooms,
         room_cycles: normalizedRoomCycles,
-        messages: (store.messages ?? seedStore.messages).map(message => {
-            const chatMeta = inferSeedChatMetadata(message.sender_name, message.raw_text);
-            return {
-                ...message,
-                property_id: (message as Message).property_id ?? DEFAULT_PROPERTY_ID,
-                wa_group: message.wa_group ?? chatMeta.chat_name,
-                chat_name: message.chat_name ?? message.wa_group ?? chatMeta.chat_name,
-                chat_type: message.chat_type ?? chatMeta.chat_type,
-                parsed_explanation: message.parsed_explanation ?? (
-                    message.parsed_action
-                        ? '由規則引擎根據房號、關鍵字與發送者部門推斷。'
-                        : '規則引擎未能穩定判斷，需人工覆核。'
-                ),
-                parsed_by: (message.parsed_by ?? 'rules') as ParseEngine,
-                parsed_model: message.parsed_model ?? (message.parsed_by === 'review' ? 'human-review' : 'rule-engine'),
-                parsed_room_refs: normalizeMessageRoomRefs(message as Message),
-                upload_batch_id: message.upload_batch_id ?? null,
-                ai_classification: message.ai_classification ?? null,
-                ai_classification_reason: message.ai_classification_reason ?? null,
-            };
-        }),
+        messages: normalizedMessages,
         handoffs: (store.handoffs ?? seedStore.handoffs).map(handoff => ({
             ...handoff,
             room_cycle_id: handoff.room_cycle_id ?? resolveActiveRoomCycleId(normalizedRoomCycles, handoff.room_id, handoff.property_id),
@@ -545,30 +631,22 @@ function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
             ),
             version: followup.version ?? 1,
         })),
-        parse_reviews: (store.parse_reviews ?? seedStore.parse_reviews).map(review => ({
-            ...review,
-            room_cycle_ids: review.room_cycle_ids ?? review.reviewed_rooms.map(roomId =>
-                resolveActiveRoomCycleId(normalizedRoomCycles, roomId, review.property_id)
-            ),
-            version: review.version ?? 1,
-        })),
+        parse_reviews: normalizedReviews,
         audit_logs: store.audit_logs ?? seedStore.audit_logs,
         upload_batches: (store.upload_batches ?? seedStore.upload_batches).map(batch => ({
             ...batch,
+            status: (() => {
+                const linkedRun = batch.ai_batch_run_id ? aiBatchRunMap.get(batch.ai_batch_run_id) : null;
+                if (!linkedRun) return batch.status;
+                if (linkedRun.status === 'completed') return 'completed';
+                if (linkedRun.status === 'failed') return 'failed';
+                return 'analyzing';
+            })(),
             ai_batch_run_id: batch.ai_batch_run_id ?? null,
             summary_digest: batch.summary_digest ?? null,
             updated_at: batch.updated_at ?? batch.created_at,
         })),
-        ai_batch_runs: (store.ai_batch_runs ?? seedStore.ai_batch_runs).map(run => ({
-            ...run,
-            provider: run.provider ?? 'fallback',
-            model: run.model ?? null,
-            summary_digest: run.summary_digest ?? null,
-            error: run.error ?? null,
-            started_at: run.started_at ?? null,
-            completed_at: run.completed_at ?? null,
-            updated_at: run.updated_at ?? run.created_at,
-        })),
+        ai_batch_runs: normalizedAiBatchRuns,
         ai_extracted_events: (store.ai_extracted_events ?? seedStore.ai_extracted_events).map(event => ({
             ...event,
             room_ids: event.room_ids ?? [],

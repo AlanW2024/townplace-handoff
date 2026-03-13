@@ -84,6 +84,140 @@ describe.sequential('Claude Review Fixes', () => {
         });
     });
 
+    it('drops legacy bulk-upload pending reviews that are only summary / scheduling noise', async () => {
+        await withTempWorkspace(async () => {
+            const storeMod = await import('../src/lib/store');
+
+            await storeMod.withStoreWrite(store => {
+                const now = isoNow();
+                store.messages.push({
+                    id: 'msg-upload-legacy-summary',
+                    property_id: 'tp-soho',
+                    raw_text: '是日跟進 20 Jul 25\n。5C 10L 22F已out機\n。19A已淋花及倒水',
+                    sender_name: 'Concierge',
+                    sender_dept: 'conc',
+                    wa_group: 'SOHO 前線🏡🧹🦫🐿️',
+                    chat_name: 'SOHO 前線🏡🧹🦫🐿️',
+                    chat_type: 'group',
+                    sent_at: now,
+                    parsed_room: ['5C', '10L', '22F', '19A'],
+                    parsed_room_refs: ['5C', '10L', '22F', '19A'].map(room => ({
+                        physical_room_id: room,
+                        display_code: room,
+                        scope: 'active' as const,
+                        raw_match: room,
+                    })),
+                    parsed_action: '工程進度更新',
+                    parsed_type: 'update',
+                    confidence: 0.68,
+                    parsed_explanation: 'legacy bulk upload',
+                    parsed_by: 'rules',
+                    parsed_model: 'rule-engine',
+                    created_at: now,
+                    upload_batch_id: null,
+                    ai_classification: null,
+                    ai_classification_reason: null,
+                });
+                store.parse_reviews.push({
+                    id: 'rev-legacy-summary',
+                    property_id: 'tp-soho',
+                    message_id: 'msg-upload-legacy-summary',
+                    raw_text: '是日跟進 20 Jul 25\n。5C 10L 22F已out機\n。19A已淋花及倒水',
+                    sender_name: 'Concierge',
+                    sender_dept: 'conc',
+                    confidence: 0.68,
+                    suggested_rooms: ['5C', '10L', '22F', '19A'],
+                    suggested_action: '工程進度更新',
+                    suggested_type: 'update',
+                    suggested_from_dept: 'conc',
+                    suggested_to_dept: null,
+                    reviewed_rooms: ['5C', '10L', '22F', '19A'],
+                    reviewed_action: '工程進度更新',
+                    reviewed_type: 'update',
+                    reviewed_from_dept: 'conc',
+                    reviewed_to_dept: null,
+                    review_status: 'pending',
+                    reviewed_by: null,
+                    reviewed_at: null,
+                    created_at: now,
+                    updated_at: now,
+                    version: 1,
+                });
+            });
+
+            const store = storeMod.getStore();
+            expect(store.parse_reviews.find(review => review.id === 'rev-legacy-summary')).toBeUndefined();
+            expect(store.messages.find(message => message.id === 'msg-upload-legacy-summary')?.ai_classification).toBe('context');
+        });
+    });
+
+    it('drops untouched auto reviews when newer heuristics downgrade them to context', async () => {
+        await withTempWorkspace(async () => {
+            const storeMod = await import('../src/lib/store');
+
+            await storeMod.withStoreWrite(store => {
+                const now = isoNow();
+                store.messages.push({
+                    id: 'msg-auto-room-ping',
+                    property_id: 'tp-soho',
+                    raw_text: 'ex 2b',
+                    sender_name: 'Concierge',
+                    sender_dept: 'conc',
+                    wa_group: 'SOHO 前線🏡🧹🦫🐿️',
+                    chat_name: 'SOHO 前線🏡🧹🦫🐿️',
+                    chat_type: 'group',
+                    sent_at: now,
+                    parsed_room: ['2B'],
+                    parsed_room_refs: [{
+                        physical_room_id: '2B',
+                        display_code: 'EX 2B',
+                        scope: 'archived',
+                        raw_match: 'ex 2b',
+                    }],
+                    parsed_action: null,
+                    parsed_type: null,
+                    confidence: 0.1,
+                    parsed_explanation: 'old auto review',
+                    parsed_by: 'rules',
+                    parsed_model: 'rule-engine',
+                    created_at: now,
+                    upload_batch_id: null,
+                    ai_classification: null,
+                    ai_classification_reason: null,
+                });
+                store.parse_reviews.push({
+                    id: 'rev-auto-room-ping',
+                    property_id: 'tp-soho',
+                    message_id: 'msg-auto-room-ping',
+                    raw_text: 'ex 2b',
+                    sender_name: 'Concierge',
+                    sender_dept: 'conc',
+                    confidence: 0.1,
+                    suggested_rooms: ['2B'],
+                    suggested_action: null,
+                    suggested_type: null,
+                    suggested_from_dept: 'conc',
+                    suggested_to_dept: null,
+                    reviewed_rooms: ['2B'],
+                    reviewed_action: null,
+                    reviewed_type: null,
+                    reviewed_from_dept: 'conc',
+                    reviewed_to_dept: null,
+                    review_status: 'pending',
+                    reviewed_by: null,
+                    reviewed_at: null,
+                    created_at: now,
+                    updated_at: now,
+                    version: 1,
+                });
+            });
+
+            const store = storeMod.getStore();
+            expect(store.parse_reviews.find(review => review.id === 'rev-auto-room-ping')).toBeUndefined();
+            expect(store.messages.find(message => message.id === 'msg-auto-room-ping')?.ai_classification).toBe('context');
+        });
+    });
+
     it('blocks repeated review approval and conflicting pending reviews', async () => {
         await withTempWorkspace(async () => {
             const storeMod = await import('../src/lib/store');
@@ -347,18 +481,27 @@ describe.sequential('Claude Review Fixes', () => {
                 ai_batch_run_id: string;
                 parsed_messages: number;
                 handoffs_created: number;
-                messages: Array<{ raw_text: string; parsed_action: string | null }>;
+                stored_messages: number;
             };
 
             expect(data.parsed_messages).toBe(2);
+            expect(data.stored_messages).toBe(2);
             expect(data.handoffs_created).toBe(0);
-            expect(data.messages.map(message => message.raw_text)).toEqual([
+            const storeMod = await import('../src/lib/store');
+            expect(
+                storeMod.getStore().messages
+                    .filter(message => message.upload_batch_id === data.upload_batch_id)
+                    .map(message => message.raw_text)
+            ).toEqual([
                 '10F 已完成，可清潔',
                 '23D 已完成油漆',
             ]);
-            expect(data.messages[1].parsed_action).not.toBe('工程完成 → 可清潔');
+            expect(
+                storeMod.getStore().messages
+                    .filter(message => message.upload_batch_id === data.upload_batch_id)[1]
+                    ?.parsed_action
+            ).not.toBe('工程完成 → 可清潔');
 
-            const storeMod = await import('../src/lib/store');
             await waitFor(() => {
                 const run = storeMod.getStore().ai_batch_runs.find(item => item.id === data.ai_batch_run_id);
                 return run?.status === 'completed';
@@ -398,11 +541,14 @@ describe.sequential('Claude Review Fixes', () => {
                 expect(response.status).toBe(200);
                 expect(fetchMock).not.toHaveBeenCalled();
 
-                const data = await response.json() as {
-                    messages: Array<{ parsed_by: string }>;
-                };
+                const data = await response.json() as { upload_batch_id: string };
 
-                expect(data.messages.every(message => message.parsed_by === 'rules')).toBe(true);
+                const storeMod = await import('../src/lib/store');
+                expect(
+                    storeMod.getStore().messages
+                        .filter(message => message.upload_batch_id === data.upload_batch_id)
+                        .every(message => message.parsed_by === 'rules')
+                ).toBe(true);
             } finally {
                 globalThis.fetch = originalFetch;
                 vi.unstubAllEnvs();
@@ -438,11 +584,16 @@ describe.sequential('Claude Review Fixes', () => {
                 upload_batch_id: string;
                 ai_batch_run_id: string;
                 parsed_messages: number;
-                messages: Array<{ raw_text: string; parsed_action: string | null }>;
+                stored_messages: number;
             };
 
             expect(data.parsed_messages).toBe(4);
-            expect(data.messages.map(message => message.raw_text)).toEqual([
+            expect(data.stored_messages).toBe(4);
+            expect(
+                storeMod.getStore().messages
+                    .filter(message => message.upload_batch_id === data.upload_batch_id)
+                    .map(message => message.raw_text)
+            ).toEqual([
                 'FYI',
                 '10F 已完成，可清潔',
                 '想問問曹生果度點同佢講？',
@@ -457,9 +608,10 @@ describe.sequential('Claude Review Fixes', () => {
             });
 
             const updatedStore = storeMod.getStore();
-            expect(updatedStore.parse_reviews.length).toBe(beforeReviewCount + 1);
-            expect(updatedStore.parse_reviews.at(-1)?.raw_text).toBe('19C');
+            expect(updatedStore.parse_reviews.length).toBe(beforeReviewCount);
             expect(updatedStore.parse_reviews.some(review => review.raw_text === 'FYI')).toBe(false);
+            expect(updatedStore.parse_reviews.some(review => review.raw_text === '19C')).toBe(false);
+            expect(updatedStore.messages.find(message => message.raw_text === '19C')?.ai_classification).toBe('context');
         });
     });
 });

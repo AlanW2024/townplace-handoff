@@ -4,6 +4,7 @@ import { createAuditLog } from '@/lib/audit';
 import { AuditFieldChange, HandoffStatus } from '@/lib/types';
 import { parseJsonBody } from '@/lib/api-utils';
 import { canApproveHandoff } from '@/lib/permissions';
+import { resolveRoomCycleDisplayCode } from '@/lib/room-lifecycle';
 import {
     assertAllowed,
     assertExpectedVersion,
@@ -22,9 +23,16 @@ const HANDOFF_TRANSITIONS: Record<HandoffStatus, HandoffStatus[]> = {
     completed: [],
 };
 
+function buildHandoffResponse(store: ReturnType<typeof getStore>) {
+    return store.handoffs.map(handoff => ({
+        ...handoff,
+        room_display_code: resolveRoomCycleDisplayCode(store, handoff.room_id, handoff.room_cycle_id),
+    }));
+}
+
 export async function GET() {
     const store = getStore();
-    return NextResponse.json([...store.handoffs].sort((a, b) =>
+    return NextResponse.json(buildHandoffResponse(store).sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     ));
 }
@@ -101,7 +109,10 @@ export async function PUT(request: Request) {
                 changes,
             }));
 
-            return store.handoffs[idx];
+            return {
+                ...store.handoffs[idx],
+                room_display_code: resolveRoomCycleDisplayCode(store, store.handoffs[idx].room_id, store.handoffs[idx].room_cycle_id),
+            };
         });
 
         return NextResponse.json(updated);

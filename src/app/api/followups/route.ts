@@ -4,6 +4,7 @@ import { createAuditLog, getEntityAuditLogs, getLatestEntityAuditLog } from '@/l
 import { AuditFieldChange, DeptCode, Followup, FollowupStatus } from '@/lib/types';
 import { parseJsonBody } from '@/lib/api-utils';
 import { canCloseFollowup, canEditFollowup } from '@/lib/permissions';
+import { resolveRoomDisplayCodes } from '@/lib/room-lifecycle';
 import {
     assertAllowed,
     assertExpectedVersion,
@@ -26,6 +27,11 @@ const VALID_PRIORITIES = ['info', 'warning', 'urgent'] as const;
 function buildFollowupResponse(store: ReturnType<typeof getStore>) {
     return store.followups.map(followup => ({
         ...followup,
+        related_room_display_codes: resolveRoomDisplayCodes(
+            store,
+            followup.related_rooms,
+            followup.related_room_cycles ?? []
+        ),
         audit_logs: getEntityAuditLogs(store.audit_logs, 'followup', followup.id),
         last_log: getLatestEntityAuditLog(store.audit_logs, 'followup', followup.id),
     }));
@@ -126,6 +132,11 @@ export async function POST(request: Request) {
 
             return {
                 ...followup,
+                related_room_display_codes: resolveRoomDisplayCodes(
+                    store,
+                    followup.related_rooms,
+                    followup.related_room_cycles ?? []
+                ),
                 audit_logs: getEntityAuditLogs(store.audit_logs, 'followup', followup.id),
                 last_log: getLatestEntityAuditLog(store.audit_logs, 'followup', followup.id),
             };
@@ -259,6 +270,11 @@ export async function PUT(request: Request) {
 
             return {
                 ...store.followups[idx],
+                related_room_display_codes: resolveRoomDisplayCodes(
+                    store,
+                    store.followups[idx].related_rooms,
+                    store.followups[idx].related_room_cycles ?? []
+                ),
                 audit_logs: getEntityAuditLogs(store.audit_logs, 'followup', current.id),
                 last_log: getLatestEntityAuditLog(store.audit_logs, 'followup', current.id),
             };

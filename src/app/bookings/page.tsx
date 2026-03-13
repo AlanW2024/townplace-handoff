@@ -7,6 +7,10 @@ import { Booking, DEPT_INFO } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
 
+type BookingRecord = Booking & {
+    room_display_code?: string | null;
+};
+
 const TYPE_LABELS: Record<string, string> = {
     viewing: '🏠 睇樓', shooting: '📷 拍攝',
     event: '🎉 活動', tenant_booking: '👤 租戶預約',
@@ -19,7 +23,7 @@ const TYPE_COLORS: Record<string, string> = {
 function fmtTime(d: string) { return new Date(d).toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit', hour12: false }); }
 
 export default function BookingsPage() {
-    const [bookings, setBookings] = useState<Booking[]>([]);
+    const [bookings, setBookings] = useState<BookingRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const { showToast } = useToast();
 
@@ -36,7 +40,7 @@ export default function BookingsPage() {
 
     usePolling(fetch_, 5000);
 
-    const grouped = bookings.reduce<Record<string, Booking[]>>((a, b) => {
+    const grouped = bookings.reduce<Record<string, BookingRecord[]>>((a, b) => {
         const k = new Date(b.scheduled_at).toLocaleDateString('zh-HK', { year: 'numeric', month: 'long', day: 'numeric' });
         (a[k] = a[k] || []).push(b); return a;
     }, {});
@@ -74,7 +78,7 @@ export default function BookingsPage() {
                                     style={{ borderLeftColor: di?.color || '#94A3B8' }}>
                                     <div className="flex items-center gap-2 flex-wrap mb-1.5">
                                         <span className="text-sm font-semibold text-slate-800">{TYPE_LABELS[b.booking_type] || b.booking_type}</span>
-                                        {b.room_id && <span className="px-2 py-0.5 bg-white rounded-md text-xs font-bold text-slate-700 shadow-sm border">{b.room_id}</span>}
+                                        {b.room_id && <span className="px-2 py-0.5 bg-white rounded-md text-xs font-bold text-slate-700 shadow-sm border">{b.room_display_code || b.room_id}</span>}
                                         {b.facility && <span className="flex items-center gap-1 text-xs text-slate-600"><MapPin size={11} />{b.facility}</span>}
                                     </div>
                                     <div className="flex items-center gap-3 text-xs text-slate-500">

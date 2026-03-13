@@ -208,4 +208,57 @@ describe.sequential('Store Module', () => {
             expect(msg18A!.parsed_action).toContain('執修');
         });
     });
+
+    it('stale running ai batch runs are normalized to failed so UI does not spin forever', async () => {
+        await withTempWorkspace(async () => {
+            const storeMod = await import('../src/lib/store');
+            const staleTime = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+            await storeMod.withStoreWrite((store: any) => {
+                store.upload_batches.push({
+                    id: 'upload-stale',
+                    property_id: 'tp-soho',
+                    source_file_name: 'stale.txt',
+                    chat_name: 'stale',
+                    chat_type: 'group',
+                    total_lines: 10,
+                    parsed_messages: 10,
+                    total_messages: 10,
+                    status: 'analyzing',
+                    ai_batch_run_id: 'airun-stale',
+                    summary_digest: null,
+                    created_at: staleTime,
+                    updated_at: staleTime,
+                });
+                store.ai_batch_runs.push({
+                    id: 'airun-stale',
+                    property_id: 'tp-soho',
+                    upload_batch_id: 'upload-stale',
+                    status: 'running',
+                    provider: 'fallback',
+                    model: null,
+                    total_chunks: 10,
+                    completed_chunks: 2,
+                    actionable_count: 0,
+                    context_count: 0,
+                    irrelevant_count: 0,
+                    review_count: 0,
+                    summary_digest: null,
+                    error: null,
+                    started_at: staleTime,
+                    completed_at: null,
+                    created_at: staleTime,
+                    updated_at: staleTime,
+                });
+            });
+
+            const store = storeMod.getStore();
+            const run = store.ai_batch_runs.find((item: any) => item.id === 'airun-stale');
+            const batch = store.upload_batches.find((item: any) => item.id === 'upload-stale');
+
+            expect(run?.status).toBe('failed');
+            expect(run?.error).toContain('背景分析');
+            expect(batch?.status).toBe('failed');
+        });
+    });
 });

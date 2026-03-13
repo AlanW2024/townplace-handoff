@@ -9,6 +9,7 @@ import AuditTrail from '@/components/AuditTrail';
 import { usePolling } from '@/hooks/usePolling';
 
 type DocumentRecord = Document & {
+    room_display_code?: string;
     audit_logs: AuditLog[];
     last_log: AuditLog | null;
 };
@@ -145,7 +146,7 @@ export default function DocumentsPage() {
                 <div className="flex items-start justify-between gap-4">
                     <div className="flex-1">
                         <div className="flex items-center gap-2 mb-2 flex-wrap">
-                            <span className="text-lg font-bold text-slate-800">{doc.room_id}</span>
+                            <span className="text-lg font-bold text-slate-800">{doc.room_display_code || doc.room_id}</span>
                             <span className={cn('status-badge', DOC_TYPE_COLORS[doc.doc_type] || 'bg-slate-100 text-slate-600')}>
                                 {doc.doc_type}
                             </span>

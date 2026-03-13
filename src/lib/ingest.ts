@@ -61,6 +61,10 @@ interface PreviewOptions {
     defaultClassification?: AiMessageClassification | null;
 }
 
+interface BatchIngestOptions extends PreviewOptions {
+    includeResults?: boolean;
+}
+
 let ingestCounter = 0;
 
 /**
@@ -325,16 +329,25 @@ export async function ingestMessage(input: IngestInput): Promise<IngestResult> {
 
 export async function ingestMessagesBatch(
     inputs: IngestInput[],
-    options?: PreviewOptions
+    options?: BatchIngestOptions
 ): Promise<IngestResult[]> {
     const previews: ParsePreviewResult[] = [];
     for (const input of inputs) {
         previews.push(await previewMessageParsing(input, options));
     }
 
-    return withStoreWrite(store =>
-        inputs.map((input, index) => ingestMessageIntoStore(store, input, previews[index], options))
-    );
+    return withStoreWrite(store => {
+        const collectedResults: IngestResult[] = [];
+
+        inputs.forEach((input, index) => {
+            const result = ingestMessageIntoStore(store, input, previews[index], options);
+            if (options?.includeResults !== false) {
+                collectedResults.push(result);
+            }
+        });
+
+        return collectedResults;
+    });
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractRooms, analyzeHandoffSignal, enforceHandoffSafety } from '../src/lib/message-parsing';
+import { extractRoomRefs, extractRooms, analyzeHandoffSignal, enforceHandoffSafety } from '../src/lib/message-parsing';
 import { ParseResult } from '../src/lib/types';
 
 // =========================================
@@ -32,6 +32,18 @@ describe('extractRooms', () => {
 
   it('no matches — no rooms here → []', () => {
     expect(extractRooms('no rooms here')).toEqual([]);
+  });
+
+  it('archived room reference — EX 2A check out → room refs preserve archived scope', () => {
+    const refs = extractRoomRefs('EX 2A 已 check out');
+    expect(refs).toEqual([
+      expect.objectContaining({
+        physical_room_id: '2A',
+        display_code: 'EX 2A',
+        scope: 'archived',
+      }),
+    ]);
+    expect(extractRooms('EX 2A 已 check out')).toEqual(['2A']);
   });
 });
 

@@ -20,6 +20,7 @@ import {
 } from '@/lib/types';
 
 type FollowupRecord = Followup & {
+    related_room_display_codes?: string[];
     audit_logs: AuditLog[];
     last_log: AuditLog | null;
 };
@@ -314,6 +315,9 @@ function FollowupsPageContent() {
                             const statusCfg = STATUS_CONFIG[followup.status];
                             const deptInfo = DEPT_INFO[followup.assigned_dept as DeptCode];
                             const isActive = selectedFollowup?.id === followup.id;
+                            const displayRooms = followup.related_room_display_codes?.length
+                                ? followup.related_room_display_codes
+                                : followup.related_rooms;
 
                             return (
                                 <button
@@ -356,9 +360,9 @@ function FollowupsPageContent() {
                                                     {deptInfo.name}
                                                 </span>
                                             )}
-                                            {followup.related_rooms.length > 0 && (
+                                            {displayRooms.length > 0 && (
                                                 <span className="scan-chip bg-slate-100 text-slate-600">
-                                                    {followup.related_rooms.length} 間房
+                                                    {displayRooms.length} 間房
                                                 </span>
                                             )}
                                         </div>
@@ -390,6 +394,9 @@ function FollowupsPageContent() {
                         const isUpdating = updating === followup.id;
                         const reason = actionReasons[followup.id] || '';
                         const canSubmit = operatorName.trim().length > 0 && reason.trim().length > 0;
+                        const displayRooms = followup.related_room_display_codes?.length
+                            ? followup.related_room_display_codes
+                            : followup.related_rooms;
 
                         return (
                             <div className="scan-detail">
@@ -442,13 +449,13 @@ function FollowupsPageContent() {
                                 <div className="mt-5">
                                     <p className="text-xs font-semibold text-slate-400 uppercase tracking-[0.18em]">相關房間</p>
                                     <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-                                        {followup.related_rooms.length > 0 ? followup.related_rooms.map(room => (
+                                        {displayRooms.length > 0 ? displayRooms.map((room, index) => (
                                             <Link
-                                                key={room}
-                                                href={`/rooms?highlight=${room}`}
+                                                key={`${room}-${index}`}
+                                                href={`/rooms?highlight=${followup.related_rooms[index] || room}${room.startsWith('EX ') ? '&scope=archived' : ''}`}
                                                 className={cn(
                                                     'text-[11px] px-2 py-1 rounded-md font-mono transition-colors',
-                                                    focusRooms.includes(room)
+                                                    focusRooms.includes(followup.related_rooms[index] || room.replace(/^EX\s+/, ''))
                                                         ? 'bg-blue-100 text-blue-700'
                                                         : 'bg-slate-100 text-slate-600 hover:bg-blue-100 hover:text-blue-700'
                                                 )}

@@ -25,6 +25,51 @@ async function seedHandoff(storeMod: any, opts: {
 }
 
 describe.sequential('Handoffs Route', () => {
+    it('GET returns room_display_code for archived cycle handoff', async () => {
+        await withTempWorkspace(async () => {
+            const storeMod = await import('../src/lib/store');
+            const { GET } = await import('../src/app/api/handoffs/route');
+
+            await storeMod.withStoreWrite((store: any) => {
+                store.room_cycles.push({
+                    id: 'cycle-ex-17j',
+                    property_id: 'tp-soho',
+                    room_id: '17J',
+                    display_code: 'EX 17J',
+                    scope: 'archived',
+                    lifecycle_status: 'archived',
+                    tenant_name: 'Former Tenant',
+                    check_in_at: null,
+                    check_out_at: isoNow(-24 * 60 * 60 * 1000),
+                    archived_from_code: '17J',
+                    migrated: true,
+                    created_at: isoNow(-48 * 60 * 60 * 1000),
+                    updated_at: isoNow(-24 * 60 * 60 * 1000),
+                });
+                store.handoffs.push({
+                    id: 'ho-ex-17j',
+                    property_id: 'tp-soho',
+                    room_id: '17J',
+                    room_cycle_id: 'cycle-ex-17j',
+                    from_dept: 'eng',
+                    to_dept: 'clean',
+                    action: '歷史週期清潔交接',
+                    status: 'completed',
+                    triggered_by: 'msg-ex-17j',
+                    created_at: isoNow(-1000),
+                    acknowledged_at: isoNow(-500),
+                    version: 1,
+                });
+            });
+
+            const res = await GET();
+            expect(res.status).toBe(200);
+            const data = await res.json();
+            const archived = data.find((item: { id: string }) => item.id === 'ho-ex-17j');
+            expect(archived?.room_display_code).toBe('EX 17J');
+        });
+    });
+
     it('GET returns handoffs sorted by date desc', async () => {
         await withTempWorkspace(async () => {
             const storeMod = await import('../src/lib/store');

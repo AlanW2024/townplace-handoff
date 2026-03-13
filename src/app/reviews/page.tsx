@@ -20,11 +20,13 @@ interface ParseReviewItem {
     sender_dept: DeptCode;
     confidence: number;
     suggested_rooms: string[];
+    suggested_room_display_codes?: string[];
     suggested_action: string | null;
     suggested_type: HandoffType | null;
     suggested_from_dept: DeptCode | null;
     suggested_to_dept: DeptCode | null;
     reviewed_rooms: string[];
+    reviewed_room_display_codes?: string[];
     reviewed_action: string | null;
     reviewed_type: HandoffType | null;
     reviewed_from_dept: DeptCode | null;
@@ -84,7 +86,9 @@ function ReviewsPageContent() {
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState<FilterType>('all');
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [selectedReviewIds, setSelectedReviewIds] = useState<string[]>([]);
     const [updating, setUpdating] = useState<string | null>(null);
+    const [bulkDismissing, setBulkDismissing] = useState(false);
     const [operatorName, setOperatorName] = useState('');
     const { showToast } = useToast();
 
@@ -177,6 +181,38 @@ function ReviewsPageContent() {
             showToast(e instanceof Error ? e.message : '操作失敗', 'error');
         } finally {
             setUpdating(null);
+        }
+    };
+
+    const handleBulkDismiss = async (filterType: 'low_confidence' | 'selected') => {
+        const targetIds = filterType === 'low_confidence'
+            ? reviews
+                .filter((r: ParseReviewItem) => r.review_status === 'pending' && r.confidence < 0.5)
+                .map((r: ParseReviewItem) => r.id)
+            : selectedReviewIds;
+
+        if (targetIds.length === 0) return;
+
+        setBulkDismissing(true);
+        try {
+            for (const id of targetIds) {
+                await fetch('/api/reviews', {
+                    method: 'PUT',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                        id,
+                        review_status: 'dismissed',
+                        reviewed_by: operatorName || 'Admin',
+                    }),
+                });
+            }
+            showToast(`已略過 ${targetIds.length} 條審核項`, 'success');
+            setSelectedReviewIds([]);
+            fetchReviews();
+        } catch (e: unknown) {
+            showToast(e instanceof Error ? e.message : '批量略過失敗', 'error');
+        } finally {
+            setBulkDismissing(false);
         }
     };
 
@@ -316,6 +352,9 @@ function ReviewsPageContent() {
                                 : review.confidence >= 0.5
                                     ? 'text-amber-600'
                                     : 'text-red-600';
+                            const suggestedRooms = review.suggested_room_display_codes?.length
+                                ? review.suggested_room_display_codes
+                                : review.suggested_rooms;
 
                             return (
                                 <button
@@ -340,14 +379,14 @@ function ReviewsPageContent() {
                                         <div>
                                             <p className="scan-title scan-clamp-4">「{review.raw_text}」</p>
                                             <div className="mt-2 flex gap-1.5 flex-wrap">
-                                                {review.suggested_rooms.slice(0, 3).map(room => (
+                                                {suggestedRooms.slice(0, 3).map(room => (
                                                     <span key={room} className="scan-chip bg-slate-100 text-slate-600 font-mono">
                                                         {room}
                                                     </span>
                                                 ))}
-                                                {review.suggested_rooms.length > 3 && (
+                                                {suggestedRooms.length > 3 && (
                                                     <span className="scan-chip bg-slate-100 text-slate-600">
-                                                        +{review.suggested_rooms.length - 3}
+                                                        +{suggestedRooms.length - 3}
                                                     </span>
                                                 )}
                                             </div>
@@ -398,6 +437,12 @@ function ReviewsPageContent() {
                             : review.confidence >= 0.5
                                 ? 'text-amber-600'
                                 : 'text-red-600';
+                        const suggestedRooms = review.suggested_room_display_codes?.length
+                            ? review.suggested_room_display_codes
+                            : review.suggested_rooms;
+                        const reviewedRooms = review.reviewed_room_display_codes?.length
+                            ? review.reviewed_room_display_codes
+                            : review.reviewed_rooms;
 
                         return (
                             <div className="scan-detail">
@@ -436,10 +481,10 @@ function ReviewsPageContent() {
                                 <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
                                     <p className="text-xs text-slate-400 mb-1.5 font-medium">系統解析結果</p>
                                     <div className="flex items-center gap-2 flex-wrap text-xs">
-                                        {review.suggested_rooms.length > 0 && (
+                                        {suggestedRooms.length > 0 && (
                                             <span className="flex items-center gap-1 flex-wrap">
                                                 <Home size={11} className="text-slate-400" />
-                                                {review.suggested_rooms.map(r => (
+                                                {suggestedRooms.map(r => (
                                                     <span key={r} className="px-1.5 py-0.5 bg-white text-slate-600 rounded font-mono">
                                                         {r}
                                                     </span>
@@ -456,11 +501,24 @@ function ReviewsPageContent() {
                                                 {TYPE_OPTIONS.find(t => t.value === review.suggested_type)?.label || review.suggested_type}
                                             </span>
                                         )}
-                                        {!review.suggested_action && review.suggested_rooms.length === 0 && (
+                                        {!review.suggested_action && suggestedRooms.length === 0 && (
                                             <span className="text-slate-400">（無法解析）</span>
                                         )}
                                     </div>
                                 </div>
+
+                                {reviewedRooms.length > 0 && (
+                                    <div className="mt-4 rounded-2xl border border-slate-200 bg-white/70 p-4">
+                                        <p className="text-xs text-slate-400 mb-1.5 font-medium">目前覆核房號</p>
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            {reviewedRooms.map(room => (
+                                                <span key={room} className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-mono text-xs">
+                                                    {room}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
 
                                 {isPending && (
                                     <div className="mt-5 space-y-4">

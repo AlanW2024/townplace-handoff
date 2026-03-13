@@ -4,6 +4,7 @@ import { createAuditLog, getEntityAuditLogs, getLatestEntityAuditLog } from '@/l
 import { AuditFieldChange, DocStatus } from '@/lib/types';
 import { parseJsonBody } from '@/lib/api-utils';
 import { canAdvanceDocument, canEditDocument } from '@/lib/permissions';
+import { resolveRoomCycleDisplayCode } from '@/lib/room-lifecycle';
 import {
     assertAllowed,
     assertExpectedVersion,
@@ -20,6 +21,7 @@ const DOCUMENT_OWNER_DEPT = 'lease' as const;
 function buildDocumentResponse(store: ReturnType<typeof getStore>) {
     return store.documents.map(document => ({
         ...document,
+        room_display_code: resolveRoomCycleDisplayCode(store, document.room_id, document.room_cycle_id),
         audit_logs: getEntityAuditLogs(store.audit_logs, 'document', document.id),
         last_log: getLatestEntityAuditLog(store.audit_logs, 'document', document.id),
     }));
@@ -131,6 +133,11 @@ export async function PUT(request: Request) {
 
             return {
                 ...store.documents[idx],
+                room_display_code: resolveRoomCycleDisplayCode(
+                    store,
+                    store.documents[idx].room_id,
+                    store.documents[idx].room_cycle_id
+                ),
                 audit_logs: getEntityAuditLogs(store.audit_logs, 'document', current.id),
                 last_log: getLatestEntityAuditLog(store.audit_logs, 'document', current.id),
             };
