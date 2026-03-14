@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Code Review
+
+Codex will review your code after completion.
+
 ## Project Overview
 
 TOWNPLACE SOHO 物業管理系統 — 管理工程部、清潔部、禮賓部之間的交接流程。系統從 WhatsApp 群組接收訊息，用 AI/規則引擎分析後自動建立跨部門交接信號。

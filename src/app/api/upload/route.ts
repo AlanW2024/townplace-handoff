@@ -4,7 +4,7 @@ import { ingestMessagesBatch } from '@/lib/ingest';
 import { ChatType, UploadBatch, AiBatchRun } from '@/lib/types';
 import { withStoreWrite } from '@/lib/store';
 import { generateId } from '@/lib/utils';
-import { queueAiBatchAnalysis } from '@/lib/ai/batch-analyze';
+import { runInstantRulesClassification } from '@/lib/ai/batch-analyze';
 
 export const dynamic = 'force-dynamic';
 
@@ -260,7 +260,7 @@ export async function POST(request: Request) {
         store.ai_batch_runs.push(run);
     });
 
-    queueAiBatchAnalysis(aiBatchRunId);
+    await runInstantRulesClassification(aiBatchRunId);
 
     return NextResponse.json({
         upload_batch_id: uploadBatchId,

@@ -365,7 +365,7 @@ export async function runAiBatchAnalysis(runId: string): Promise<void> {
         const batchMessages = initialStore.messages
             .filter(message => message.upload_batch_id === run.upload_batch_id)
             .sort((a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime());
-        const chunks = chunkMessages(batchMessages.map(toBatchMessageView), { maxMessages: 60 });
+        const chunks = chunkMessages(batchMessages.map(toBatchMessageView), { maxMessages: 300 });
 
         await markRunProgress(runId, {
             status: 'running',
@@ -374,16 +374,31 @@ export async function runAiBatchAnalysis(runId: string): Promise<void> {
             completed_chunks: 0,
         });
 
-        const chunkAnalyses: BatchChunkAnalysis[] = [];
-        for (let index = 0; index < chunks.length; index++) {
-            const chunkAnalysis = await analyzeChunk(chunks[index]);
-            chunkAnalyses.push(chunkAnalysis);
+        const AI_CONCURRENCY = 5;
+        const chunkAnalyses: BatchChunkAnalysis[] = new Array(chunks.length);
+        let completedCount = 0;
+
+        const processChunk = async (idx: number) => {
+            chunkAnalyses[idx] = await analyzeChunk(chunks[idx]);
+            completedCount++;
             await markRunProgress(runId, {
-                completed_chunks: index + 1,
-                provider: chunkAnalysis.provider,
-                model: chunkAnalysis.model,
+                completed_chunks: completedCount,
+                provider: chunkAnalyses[idx].provider,
+                model: chunkAnalyses[idx].model,
             });
-        }
+        };
+
+        let nextIndex = 0;
+        const worker = async () => {
+            while (nextIndex < chunks.length) {
+                const idx = nextIndex++;
+                await processChunk(idx);
+            }
+        };
+
+        await Promise.all(
+            Array.from({ length: Math.min(AI_CONCURRENCY, chunks.length) }, () => worker())
+        );
 
         const merged = mergeChunkAnalyses(chunkAnalyses);
         const counts = summarizeClassifications(merged.message_classifications);
@@ -480,6 +495,89 @@ async function drainQueuedAnalyses(): Promise<void> {
             }, 10);
         }
     }
+}
+
+export async function runInstantRulesClassification(runId: string): Promise<void> {
+    const store = getStore();
+    const run = store.ai_batch_runs.find(item => item.id === runId);
+    if (!run) return;
+
+    const batchMessages = store.messages
+        .filter(message => message.upload_batch_id === run.upload_batch_id)
+        .sort((a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime());
+
+    const batchViews = batchMessages.map(toBatchMessageView);
+    const classifications = batchViews.map(classificationForMessage);
+    const counts = summarizeClassifications(classifications);
+    const events = buildFallbackEvents(batchViews, classifications);
+    const summaryDigest = `本次 upload 共 ${batchMessages.length} 則訊息；可操作 ${counts.actionable}、背景 ${counts.context}、無關 ${counts.irrelevant}、需覆核 ${counts.review}。`;
+
+    const classificationMap = new Map(classifications.map(item => [item.message_id, item]));
+
+    await withStoreWrite(liveStore => {
+        const liveRun = liveStore.ai_batch_runs.find(item => item.id === runId);
+        if (!liveRun) return;
+        const batch = liveStore.upload_batches.find(item => item.id === liveRun.upload_batch_id);
+        if (!batch) return;
+
+        const roomCycleIdsForRefs = (roomRefs: RoomReference[]) =>
+            roomRefs.map(ref => ensureRoomCycleForReference(liveStore, ref, liveRun.property_id).id);
+
+        // Update message classifications
+        for (const message of liveStore.messages.filter(item => item.upload_batch_id === batch.id)) {
+            const classification = classificationMap.get(message.id);
+            if (!classification) continue;
+            message.ai_classification = classification.classification;
+            message.ai_classification_reason = classification.reason;
+
+            if (
+                classification.classification === 'review' &&
+                !liveStore.parse_reviews.some(review => review.message_id === message.id && review.review_status === 'pending')
+            ) {
+                const roomRefs = message.parsed_room_refs ?? [];
+                if (roomRefs.length > 0) {
+                    liveStore.parse_reviews.push(buildReviewFromMessage(
+                        message,
+                        classification.reason,
+                        roomCycleIdsForRefs(roomRefs)
+                    ));
+                }
+            }
+        }
+
+        // Create event records
+        for (const event of events) {
+            liveStore.ai_extracted_events.push(createEventRecord(
+                liveRun,
+                batch.id,
+                event,
+                roomCycleIdsForRefs(event.room_refs)
+            ));
+        }
+
+        // Mark run as completed
+        const now = new Date().toISOString();
+        liveRun.status = 'completed';
+        liveRun.provider = 'rules';
+        liveRun.model = 'instant-rules-classification';
+        liveRun.total_chunks = 1;
+        liveRun.completed_chunks = 1;
+        liveRun.actionable_count = counts.actionable;
+        liveRun.context_count = counts.context;
+        liveRun.irrelevant_count = counts.irrelevant;
+        liveRun.review_count = counts.review;
+        liveRun.summary_digest = summaryDigest;
+        liveRun.error = null;
+        liveRun.started_at = now;
+        liveRun.completed_at = now;
+        liveRun.updated_at = now;
+
+        // Update upload batch status
+        batch.status = 'completed';
+        batch.summary_digest = summaryDigest;
+        batch.ai_batch_run_id = liveRun.id;
+        batch.updated_at = now;
+    });
 }
 
 export function queueAiBatchAnalysis(runId: string): void {
