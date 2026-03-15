@@ -89,31 +89,14 @@ function parseWhatsAppDate(dateStr: string, meridiem: string | null, timePart: s
     return new Date(year, month, day, hour, minute, second).toISOString();
 }
 
-function shouldSkipMessage(sender: string, rawText: string): boolean {
-    const normalizedSender = sender.replace(/[\u200e\u202f]/g, '').trim();
+function shouldSkipMessage(_sender: string, rawText: string): boolean {
     const text = rawText.replace(/[\u200e\u202f]/g, '').trim();
 
     if (!text) return true;
     if (/^\uFEFF/.test(text)) return true;
-    if (/圖片已略去|影片已略去|文件已略去|語音通話已略去|<Media omitted>|image omitted|video omitted|audio omitted|document omitted|<attached:/i.test(text)) return true;
+    // Only skip WhatsApp system/meta messages — keep all user-sent content
     if (/訊息和通話經端對端加密|Messages and calls are end-to-end encrypted/i.test(text)) return true;
     if (/建立了此群組|新增了你|你現已成為管理員|changed this group's icon|changed the subject|created group|added|left|joined using this group's invite link|security code changed/i.test(text)) return true;
-    if (/不明用戶/.test(normalizedSender) && /建立了此群組|加入了|離開了/.test(text)) return true;
-
-    // ── NEW FILTERS ──
-
-    // Deleted messages
-    if (/^(此訊息已被刪除|This message was deleted|You deleted this message)\.?$/i.test(text)) return true;
-
-    // Emoji-only (no letters, digits, or CJK characters)
-    if (!/[a-zA-Z0-9\u4e00-\u9fff\u3400-\u4dbf]/.test(text)) return true;
-
-    // Voice / location / contact / poll placeholders
-    if (/^(語音訊息|voice message|location:|位置：|聯絡人卡片|contact card)/i.test(text)) return true;
-
-    // Pure acknowledgment (exact match, case-insensitive)
-    const ACKNOWLEDGMENT = /^(ok+|okay|o\.?k\.?|noted|roger|copy|收到|好的?|嗯|明白|知道了?|了解|多謝|唔該|thanks?|thank\s*you|thx|tks|got\s*it|will\s*do|sure|yes|no\s*problem|冇問題|盡做|跟|跟住|遵命|好嘅|是的?|係|noted\s*with\s*thanks|received?|ack|okay?👍)$/i;
-    if (ACKNOWLEDGMENT.test(text.trim())) return true;
 
     return false;
 }

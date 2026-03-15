@@ -484,8 +484,8 @@ describe.sequential('Claude Review Fixes', () => {
                 stored_messages: number;
             };
 
-            expect(data.parsed_messages).toBe(2);
-            expect(data.stored_messages).toBe(2);
+            expect(data.parsed_messages).toBe(3);
+            expect(data.stored_messages).toBe(3);
             expect(data.handoffs_created).toBe(0);
             const storeMod = await import('../src/lib/store');
             expect(
@@ -494,6 +494,7 @@ describe.sequential('Claude Review Fixes', () => {
                     .map(message => message.raw_text)
             ).toEqual([
                 '10F 已完成，可清潔',
+                '<Media omitted>',
                 '23D 已完成油漆',
             ]);
             expect(
