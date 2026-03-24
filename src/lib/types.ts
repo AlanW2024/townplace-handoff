@@ -350,6 +350,55 @@ export const STATUS_LABELS: Record<string, string> = {
     dismissed: '已略過',
 };
 
+// ===========================
+// Room Progress (Daily Summary)
+// ===========================
+
+export type ProgressCategory =
+    | 'check_in' | 'check_out' | 'final'
+    | 'maintenance' | 'ac' | 'plumbing' | 'paint' | 'mold'
+    | 'cleaning' | 'appliance' | 'door_lock' | 'pest_control'
+    | 'other';
+
+export type ProgressStatus = 'completed' | 'in_progress' | 'pending' | 'follow_up';
+
+export interface RoomProgressEntry {
+    id: string;
+    property_id: string;
+    room_id: string;
+    summary_date: string;       // YYYY-MM-DD
+    category: ProgressCategory;
+    status: ProgressStatus;
+    raw_line: string;
+    sender_name: string;
+    message_sent_at: string;    // ISO datetime
+    upload_batch_id: string | null;
+    created_at: string;
+}
+
+export const PROGRESS_CATEGORY_LABELS: Record<ProgressCategory, string> = {
+    check_in: '入住',
+    check_out: '退房',
+    final: 'Final 檢查',
+    maintenance: '維修/工程',
+    ac: '冷氣',
+    plumbing: '漏水/滴水',
+    paint: '油漆',
+    mold: '霉菌',
+    cleaning: '清潔',
+    appliance: '電器',
+    door_lock: '大門/鎖',
+    pest_control: '滅蟲',
+    other: '其他',
+};
+
+export const PROGRESS_STATUS_LABELS: Record<ProgressStatus, string> = {
+    completed: '已完成',
+    in_progress: '進行中',
+    pending: '待處理',
+    follow_up: '需跟進',
+};
+
 export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
     created: '建立',
     status_advanced: '推進',

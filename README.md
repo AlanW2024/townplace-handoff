@@ -215,6 +215,13 @@ Currently aggregates critical operational alerts for:
 ### 9. Automated Daily Reports
 - Generates a compiled "Today's Follow-ups" list based heavily on parsed messages and daily active handoffs.
 
+### 10. Daily Progress Tracking (是日跟進)
+- Automatically extracts room-level progress entries from WhatsApp「是日跟進」daily summary messages during upload.
+- Pure-function parser classifies each bullet line into 13 categories (check-in, checkout, AC, plumbing, cleaning, maintenance, etc.) and 4 statuses (completed, in-progress, pending, follow-up).
+- Supports multi-room lines (e.g., `12E 7H 20J 已換大門電`), comma-separated rooms, and various bullet formats (`-`, `。`, `•`, numbered lists).
+- Manager dashboard at `/rooms/progress` displays entries grouped by date, with filters for room, category, status, and date range.
+- Progress data is persisted in the store and queryable via `GET /api/rooms/progress`.
+
 ---
 
 ## Technical Stack Overview
@@ -233,16 +240,18 @@ Currently aggregates critical operational alerts for:
 - **Authentication**: Auth abstraction layer (`src/lib/auth.ts`) — Currently a demo login gate, fundamentally architected to be instantly replaceable with real-world JWT token integrations.
 - **Future Database Blueprints**: `src/lib/storage/` directly holds future database migration drafts; while not hooked to the main data flow presently, it paves the path for PostgreSQL.
 - **Observability**: Rich observability wrapper hooks (`src/lib/observability.ts`) for structured UI event captures.
-- **Testing Standard**: Vitest — Rock-solid structure with 245 strict tests covering exactly 19 files.
+- **Testing Standard**: Vitest — Rock-solid structure with 322 strict tests covering 23 files.
 
 ---
 
 ## Architectural Growth Highlights
 
-### Production-ready Test Coverage (245 tests across 19 core files)
+### Production-ready Test Coverage (322 tests across 23 core files)
 - `tests/parser.test.ts` — 34 rules: WhatsApp parsing edge cases, dept mapping boundaries.
-- `tests/message-parsing.test.ts` — 27 tests: Secure room extraction and handoff safety gates.
+- `tests/message-parsing.test.ts` — 28 tests: Secure room extraction and handoff safety gates.
 - `tests/ingest.test.ts` — 36 checks: Complete state updates and summary detection patterns.
+- `tests/daily-summary-parser.test.ts` — 40 tests: 是日跟進 detection, room extraction, 13-category classification, 4-status inference, bullet parsing, integration.
+- `tests/upload-noise-filter.test.ts` — 13 tests: Upload system message filtering.
 - `tests/audit.test.ts` — 7 tests: 100% audit log creation.
 - `tests/document-pipeline.test.ts` — 15 rules: Pipeline advancement and strict validation.
 ... (and many more robust testing patterns guaranteeing stability)
@@ -269,7 +278,7 @@ To temper expectations for non-technical members, this prototype is currently NO
 - "Production-ready" or scalable for raw public Kubernetes deployment out-of-the-box.
 
 However, what it currently spectacularly **IS**:
-**A heavily impressive, fully functional prototype wrapped elegantly in 245 production tests, featuring an integrated dynamic policy engine, a comprehensive RBAC permissions model blueprint, and remarkably clean architectural separation prepared perfectly for incoming database scale.**
+**A heavily impressive, fully functional prototype wrapped elegantly in 322 production tests, featuring an integrated dynamic policy engine, a comprehensive RBAC permissions model blueprint, automated daily progress extraction from WhatsApp summaries, and remarkably clean architectural separation prepared perfectly for incoming database scale.**
 
 ---
 

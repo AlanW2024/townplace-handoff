@@ -7,13 +7,14 @@ import { useRouter } from 'next/navigation';
 import {
     MessageSquare, LayoutGrid, ArrowRightLeft, FileText,
     ClipboardList, Calendar, Upload, Building2, Menu, X, LogOut,
-    Lightbulb, ListChecks, SearchCheck, Bell, MessageSquareHeart
+    Lightbulb, ListChecks, SearchCheck, Bell, MessageSquareHeart, TrendingUp
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const NAV_ITEMS = [
     { href: '/', icon: MessageSquare, label: '訊息中心', labelEn: 'Messages' },
     { href: '/rooms', icon: LayoutGrid, label: '房間看板', labelEn: 'Rooms' },
+    { href: '/rooms/progress', icon: TrendingUp, label: '每日進度', labelEn: 'Progress' },
     { href: '/documents', icon: FileText, label: '文件追蹤', labelEn: 'Documents' },
     { href: '/report', icon: ClipboardList, label: '每日報告', labelEn: 'Report' },
     { href: '/satisfaction', icon: MessageSquareHeart, label: '滿意度調查', labelEn: 'Satisfaction' },

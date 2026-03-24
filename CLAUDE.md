@@ -16,7 +16,7 @@ TOWNPLACE SOHO 物業管理系統 — 管理工程部、清潔部、禮賓部之
 npm run dev           # Start dev server (Next.js)
 npm run build         # Production build — use to verify zero errors
 npm run lint          # ESLint
-npm run test          # Vitest — 245 tests across 19 files
+npm run test          # Vitest — 322 tests across 23 files
 npm run test:coverage # Vitest with v8 coverage report
 ```
 
@@ -27,7 +27,7 @@ npm run test:coverage # Vitest with v8 coverage report
 - **Tailwind CSS** for styling
 - **File-based JSON store** (`.demo-store.json`) — no database
 - **Cookie auth** (`tp-auth=authenticated`) via `src/middleware.ts` → `isAuthenticated()` from `auth.ts`
-- **Vitest** for testing (245 tests)
+- **Vitest** for testing (322 tests)
 
 ### Data Flow
 ```
@@ -49,6 +49,8 @@ WhatsApp message → POST /api/messages or /api/upload
 - **`audit.ts`** — `createAuditLog()` with field-level change tracking (`AuditFieldChange`)
 - **`api-utils.ts`** — `parseJsonBody<T>()` for safe JSON parsing with 400 error on invalid body. Emits `api.error` events.
 - **`observability.ts`** — `ObservabilityHook` interface + `consoleHook`. `emitEvent()` wired into store writes, message ingestion, and API error handling.
+- **`daily-summary-parser.ts`** — Pure-function parser for extracting room-level progress from WhatsApp「是日跟進」daily summary messages. Detects summary marker, splits bullet lines, extracts room IDs (`\b\d{1,2}[A-M]\b`), classifies into 13 categories and 4 statuses. No side effects, no store access.
+- **`ai/batch-analyze.ts`** — Instant rules-based classification + parallel AI batch analysis for uploaded messages.
 
 ### Policy Engine (`src/lib/policy/`)
 Configurable business rules consumed by parser, notifications, and suggestions:
@@ -65,8 +67,14 @@ Configurable business rules consumed by parser, notifications, and suggestions:
 - **`storage/json-store.ts`** — `JsonStoreRepository` wrapping existing store.ts
 - **Status**: Kept only as a future migration sketch for a real database. All routes still import `getStore`/`withStoreWrite` directly.
 
+### Daily Progress Tracking
+- **Upload integration**: `POST /api/upload` extracts「是日跟進」entries from WhatsApp uploads → stores as `RoomProgressEntry` in `store.room_progress`
+- **Progress API**: `GET /api/rooms/progress` — filters by room, category, date range (from/to), sorted by date desc
+- **Dashboard**: `/rooms/progress` — manager view grouped by date, filterable by category (13 types), status (4 types), room, date range
+- **Types**: `ProgressCategory` (check_in, check_out, final, maintenance, ac, plumbing, paint, mold, cleaning, appliance, door_lock, pest_control, other), `ProgressStatus` (completed, in_progress, pending, follow_up), `RoomProgressEntry`
+
 ### Frontend Structure
-- **Existing frontend**: `src/app/` (page.tsx, rooms/, documents/, ai/, etc.)
+- **Existing frontend**: `src/app/` (page.tsx, rooms/, rooms/progress/, documents/, ai/, etc.)
 - **Gemini comparison frontend**: `src/app/gemini/` (isolated, own layout/sidebar, intentionally UI-only / non-persistent)
 - **Shared components**: `src/components/` (Sidebar, LayoutShell, Toast, AuditTrail)
 - **Custom hooks**: `src/hooks/usePolling.ts` — visibility-aware polling (pauses when tab hidden)
@@ -104,9 +112,9 @@ All routes use `withStoreWrite()` for mutations and `parseJsonBody()` for safe J
 
 ## Test Coverage
 
-### Covered (245 tests across 19 files)
+### Covered (322 tests across 23 files)
 - `tests/parser.test.ts` (34) — message parsing + dept mapping + word boundary regression
-- `tests/message-parsing.test.ts` (27) — room extraction + handoff signals + safety gates
+- `tests/message-parsing.test.ts` (28) — room extraction + handoff signals + safety gates
 - `tests/ingest.test.ts` (36) — room status updates + summary detection + integration
 - `tests/audit.test.ts` (7) — audit log creation + queries
 - `tests/document-pipeline.test.ts` (15) — 6-step pipeline transitions
@@ -120,6 +128,10 @@ All routes use `withStoreWrite()` for mutations and `parseJsonBody()` for safe J
 - `tests/store.test.ts` (8) — normalizeStore, seed data, persistence, reset
 - `tests/api-validation.test.ts` (8) — invalid JSON, priority enum, version mismatch
 - `tests/handoffs-route.test.ts` (10) — transition matrix, actor/reason, audit logging, version
+- `tests/daily-summary-parser.test.ts` (40) — 是日跟進 detection, room extraction, category/status classification, bullet parsing, integration
+- `tests/upload-noise-filter.test.ts` (13) — upload filter system message skipping
+- `tests/review-queue.test.ts` (14) — review queue operations
+- `tests/ai-provider.test.ts` (2) — AI provider configuration
 
 ### Shared Test Helpers (`tests/helpers.ts`)
 - `withTempWorkspace(run, prefix?)` — isolated temp directory with vi.resetModules()

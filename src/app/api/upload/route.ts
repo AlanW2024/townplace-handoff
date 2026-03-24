@@ -1,10 +1,11 @@
 import AdmZip from 'adm-zip';
 import { NextResponse } from 'next/server';
 import { ingestMessagesBatch } from '@/lib/ingest';
-import { ChatType, UploadBatch, AiBatchRun } from '@/lib/types';
+import { ChatType, UploadBatch, AiBatchRun, RoomProgressEntry } from '@/lib/types';
 import { withStoreWrite } from '@/lib/store';
 import { generateId } from '@/lib/utils';
 import { runInstantRulesClassification } from '@/lib/ai/batch-analyze';
+import { isDailySummaryMessage, parseDailySummary, toSummaryDate } from '@/lib/daily-summary-parser';
 
 export const dynamic = 'force-dynamic';
 
@@ -190,6 +191,32 @@ export async function POST(request: Request) {
     }
 
     flushPendingMessage();
+    const now = new Date().toISOString();
+
+    // Extract room progress from "是日跟進" daily summaries
+    const progressEntries: RoomProgressEntry[] = [];
+    for (const entry of entriesToIngest) {
+        if (!isDailySummaryMessage(entry.raw_text)) continue;
+        const parsed = parseDailySummary(entry.raw_text);
+        const summaryDate = toSummaryDate(entry.sent_at || now);
+        for (const line of parsed) {
+            for (const roomId of line.rooms) {
+                progressEntries.push({
+                    id: `prog-${generateId()}`,
+                    property_id: 'tp-soho',
+                    room_id: roomId,
+                    summary_date: summaryDate,
+                    category: line.category,
+                    status: line.status,
+                    raw_line: line.raw_line,
+                    sender_name: entry.sender_name,
+                    message_sent_at: entry.sent_at || now,
+                    upload_batch_id: uploadBatchId,
+                    created_at: now,
+                });
+            }
+        }
+    }
 
     // Bulk uploads first preserve every raw message, then kick off full-conversation AI analysis.
     await ingestMessagesBatch(entriesToIngest, {
@@ -200,7 +227,6 @@ export async function POST(request: Request) {
         defaultClassification: 'context',
         includeResults: false,
     });
-    const now = new Date().toISOString();
 
     await withStoreWrite(store => {
         const uploadBatch: UploadBatch = {
@@ -241,6 +267,7 @@ export async function POST(request: Request) {
 
         store.upload_batches.push(uploadBatch);
         store.ai_batch_runs.push(run);
+        store.room_progress.push(...progressEntries);
     });
 
     await runInstantRulesClassification(aiBatchRunId);
@@ -254,5 +281,6 @@ export async function POST(request: Request) {
         chat_name: chatName,
         chat_type: chatType,
         stored_messages: entriesToIngest.length,
+        progress_entries: progressEntries.length,
     });
 }

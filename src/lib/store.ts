@@ -19,6 +19,7 @@ import {
     AiBatchRun,
     AiExtractedEvent,
     RoomReference,
+    RoomProgressEntry,
 } from './types';
 import { createAuditLog } from './audit';
 import { parseWhatsAppMessage } from './parser';
@@ -43,6 +44,7 @@ export interface StoreData {
     upload_batches: UploadBatch[];
     ai_batch_runs: AiBatchRun[];
     ai_extracted_events: AiExtractedEvent[];
+    room_progress: RoomProgressEntry[];
 }
 
 const STORE_PATH = path.join(process.cwd(), '.demo-store.json');
@@ -486,6 +488,7 @@ function buildSeedStore(): StoreData {
         upload_batches: [],
         ai_batch_runs: [],
         ai_extracted_events: [],
+        room_progress: [],
     };
 }
 
@@ -656,6 +659,7 @@ function normalizeStore(rawStore: Partial<StoreData> | null): StoreData {
             status: event.status ?? 'candidate',
             updated_at: event.updated_at ?? event.created_at,
         })),
+        room_progress: store.room_progress ?? [],
     };
 }
 
